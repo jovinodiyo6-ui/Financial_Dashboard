@@ -36,22 +36,35 @@ git push -u origin main
 
 ---
 
-## Step 2: Set Up Cloud Database
+## Step 2: Set Up Cloud Database (Supabase)
 
-### Option A: ElephantSQL (Recommended for beginners)
+### Getting Started with Supabase
 
-1. Go to https://www.elephantsql.com/
-2. Sign up for free account
-3. Create a new PostgreSQL instance
-4. Copy the database URL (looks like: `postgresql://user:password@host/dbname`)
-5. Save this for later steps
+1. Go to https://supabase.com/
+2. Click "Start your project" or "Sign In"
+3. Sign up with GitHub (easiest option)
 
-### Option B: Railway
+### Create a New Project
 
-1. Go to https://railway.app/
-2. Sign up with GitHub
-3. Create new project > PostgreSQL
-4. Copy the database connection string
+1. Click "New project"
+2. Fill in:
+   - **Project name:** `financial-dashboard`
+   - **Password:** Create a strong password
+   - **Region:** Choose closest to you
+3. Click "Create new project" and wait for it to initialize (2-3 minutes)
+
+### Get Your Database Connection String
+
+1. Once created, go to **Settings** → **Database**
+2. Copy the **Connection String** (under "URI")
+3. It will look like: `postgresql://postgres:[PASSWORD]@db.[PROJECT-ID].supabase.co:5432/postgres`
+4. **Replace [PASSWORD] with your database password** from step 2 above
+5. Save this URL as your `DATABASE_URL`
+
+**Example:**
+```
+postgresql://postgres:your-strong-password@db.example.supabase.co:5432/postgres
+```
 
 ---
 
@@ -74,13 +87,13 @@ git push -u origin main
 In Render dashboard, go to your service and click "Environment":
 
 ```
-DATABASE_URL=postgresql://user:password@host/dbname
+DATABASE_URL=postgresql://postgres:your-password@db.project-id.supabase.co:5432/postgres
 JWT_SECRET_KEY=your-super-secret-key-here-change-this
 FLASK_ENV=production
 PORT=5000
 ```
 
-Replace `DATABASE_URL` with your ElephantSQL or Railway connection string.
+Replace `DATABASE_URL` with your Supabase connection string (make sure to include your password).
 
 ### 3.3 Deploy
 
@@ -169,11 +182,13 @@ VITE_API_URL=https://financial-dashboard-api.onrender.com
 
 ### Backend (.env or Render)
 ```
-DATABASE_URL=postgresql://user:password@host/dbname
+DATABASE_URL=postgresql://postgres:your-password@db.project-id.supabase.co:5432/postgres
 JWT_SECRET_KEY=your-secret-key-here
 FLASK_ENV=production
 PORT=5000
 ```
+
+Get `DATABASE_URL` from Supabase: Settings → Database → Connection String → URI
 
 ---
 
@@ -186,8 +201,9 @@ PORT=5000
 
 ### Database connection errors
 - Verify `DATABASE_URL` format and credentials
+- Make sure password is correct in connection string
+- Check IP allowlist in Supabase (go to Settings → Database → Allowed IPs, add 0.0.0.0/0)
 - Test connection using `psql` or database client
-- Check IP allowlist in database provider (allow all IPs: 0.0.0.0/0)
 
 ### Backend deployment fails
 - Check build logs in Render dashboard
@@ -226,9 +242,8 @@ PORT=5000
 
 ## Helpful Links
 
+- [Supabase Documentation](https://supabase.com/docs)
 - [Render Documentation](https://render.com/docs)
 - [Vercel Documentation](https://vercel.com/docs)
-- [ElephantSQL Help](https://www.elephantsql.com/docs)
-- [Railway Documentation](https://docs.railway.app/)
 - [Flask-SQLAlchemy with PostgreSQL](https://flask-sqlalchemy.palletsprojects.com/en/3.0.x/)
 
