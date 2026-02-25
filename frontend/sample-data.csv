@@ -1,0 +1,9 @@
+type,amount,category
+revenue,10000,operating
+expense,3000,operating
+asset,15000,
+liability,5000,
+capital,7000,financing
+raw_materials,2000,
+labor,1000,
+overhead,500,
