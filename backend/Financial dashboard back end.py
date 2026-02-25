@@ -4,14 +4,23 @@ from flask_jwt_extended import JWTManager, create_access_token, jwt_required, ge
 from flask_bcrypt import Bcrypt
 from flask_cors import CORS
 import hashlib, datetime, json, os, pandas as pd
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
 
 # ---------------- CONFIG ----------------
 
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///saas.db"
-app.config["JWT_SECRET_KEY"] = "supersecret"
+# Support both SQLite (dev) and PostgreSQL (production)
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///saas.db")
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
+app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "supersecret")
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
@@ -203,4 +212,6 @@ def home():
 # ---------------- RUN ----------------
 
 if __name__=="__main__":
-    app.run(debug=True)
+    port = int(os.getenv("PORT", 5000))
+    debug = os.getenv("FLASK_ENV") == "development"
+    app.run(host="0.0.0.0", port=port, debug=debug)

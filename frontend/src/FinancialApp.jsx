@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip } from "recharts";
 
+const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:5000";
+
 export default function App() {
 
   // ---------------- AUTH STATE ----------------
@@ -21,7 +23,7 @@ export default function App() {
   // ---------------- LOGIN ----------------
   const login = async()=>{
 
-    const res = await fetch("http://127.0.0.1:5000/login",{
+    const res = await fetch(`${API_URL}/login`,{
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({email,password})
@@ -42,7 +44,7 @@ export default function App() {
       return
     }
 
-    const res = await fetch("http://127.0.0.1:5000/register",{
+    const res = await fetch(`${API_URL}/register`,{
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({
@@ -69,7 +71,7 @@ export default function App() {
   // ---------------- LOAD ANALYTICS ----------------
   const loadStats = async()=>{
 
-    const res = await fetch("http://127.0.0.1:5000/analytics",{
+    const res = await fetch(`${API_URL}/analytics`,{
       headers:{ Authorization:`Bearer ${token}` }
     })
 
@@ -82,7 +84,7 @@ export default function App() {
 
     try {
       setUserCountUpdating(true)
-      const res = await fetch("http://127.0.0.1:5000/user-count",{
+      const res = await fetch(`${API_URL}/user-count`,{
         headers:{ Authorization:`Bearer ${token}` }
       })
 
@@ -107,7 +109,7 @@ export default function App() {
     const form = new FormData()
     form.append("file",file)
 
-    await fetch("http://127.0.0.1:5000/analyze",{
+    await fetch(`${API_URL}/analyze`,{
       method:"POST",
       headers:{ Authorization:`Bearer ${token}` },
       body:form
