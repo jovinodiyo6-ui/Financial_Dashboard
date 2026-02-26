@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: financial_dashboard
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: changeme123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  backend:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      DATABASE_URL: postgresql://admin:changeme123@db:5432/financial_dashboard
+      JWT_SECRET_KEY: dev-secret-key
+      FLASK_ENV: development
+    depends_on:
+      - db
+    volumes:
+      - ./backend:/app
+
+  frontend:
+    image: node:18-alpine
+    working_dir: /app/frontend/src
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app/frontend
+    command: npm run dev
+
+volumes:
+  postgres_data:
