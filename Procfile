@@ -1,1 +1,1 @@
-web: gunicorn "Financial dashboard back end:app"
+web: gunicorn app:app

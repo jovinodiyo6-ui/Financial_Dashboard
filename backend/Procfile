@@ -1,4 +1,4 @@
 # Heroku Configuration
 # Use this for deploying to Heroku with PostgreSQL
 
-web: gunicorn -w 4 "Financial dashboard back end:app"
+web: gunicorn -w 4 app:app

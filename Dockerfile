@@ -14,4 +14,4 @@ COPY backend/ .
 RUN mkdir -p instance
 
 # Run app
-CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "Financial dashboard back end:app"]
+CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "app:app"]
