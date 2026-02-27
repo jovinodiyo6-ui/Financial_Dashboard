@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from "recharts";
 
 const API_URL = (import.meta.env.VITE_API_URL || "http://127.0.0.1:5000").trim();
 const TOKEN_KEY = "financepro_token";
@@ -52,6 +52,15 @@ const toAmount = (value) => {
 const formatMoney = (value) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value || 0);
 
+const INITIAL_BUDGET_TARGETS = {
+  revenue: 0,
+  expense: 0,
+  totalAssets: 0,
+  totalLiabilities: 0,
+  equity: 0,
+  netCashFlow: 0,
+};
+
 export default function App() {
   const [token, setToken] = useState(() => readStoredToken());
   const [email, setEmail] = useState("");
@@ -69,6 +78,7 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState("");
   const [infoMessage, setInfoMessage] = useState("");
   const [ledgerRows, setLedgerRows] = useState(INITIAL_LEDGER_ROWS);
+  const [budgetTargets, setBudgetTargets] = useState(INITIAL_BUDGET_TARGETS);
 
   const chartData = useMemo(() => {
     if (!stats) {
@@ -156,15 +166,14 @@ export default function App() {
 
   const statementGraphData = useMemo(
     () => [
-      { name: "Revenue", value: statement.revenue },
-      { name: "Expenses", value: statement.expense },
-      { name: "Profit", value: statement.profit },
-      { name: "Assets", value: statement.totalAssets },
-      { name: "Liabilities", value: statement.totalLiabilities },
-      { name: "Equity", value: statement.equity },
-      { name: "Net Cash Flow", value: statement.netCashFlow },
+      { name: "Revenue", actual: statement.revenue, budget: toAmount(budgetTargets.revenue) },
+      { name: "Expenses", actual: statement.expense, budget: toAmount(budgetTargets.expense) },
+      { name: "Assets", actual: statement.totalAssets, budget: toAmount(budgetTargets.totalAssets) },
+      { name: "Liabilities", actual: statement.totalLiabilities, budget: toAmount(budgetTargets.totalLiabilities) },
+      { name: "Equity", actual: statement.equity, budget: toAmount(budgetTargets.equity) },
+      { name: "Net Cash Flow", actual: statement.netCashFlow, budget: toAmount(budgetTargets.netCashFlow) },
     ],
-    [statement],
+    [statement, budgetTargets],
   );
 
   const authorizedFetch = async (path, options = {}) => {
@@ -345,6 +354,10 @@ export default function App() {
 
   const deleteLedgerRow = (rowId) => {
     setLedgerRows((rows) => rows.filter((row) => row.id !== rowId));
+  };
+
+  const updateBudgetTarget = (key, value) => {
+    setBudgetTargets((current) => ({ ...current, [key]: value }));
   };
 
   useEffect(() => {
@@ -613,15 +626,79 @@ export default function App() {
         <div style={styles.card}>
           <h3>Financial Statement Graph</h3>
           <p style={styles.graphNote}>
-            Bar/Column Charts: Best for comparing distinct categories, such as sales performance by region, or comparing actual costs against budgeted costs.
+            Bar/Column comparison of actual results against budget by statement category.
           </p>
+          <div style={styles.budgetGrid}>
+            <label style={styles.budgetField}>
+              Revenue Budget
+              <input
+                type="number"
+                step="0.01"
+                value={budgetTargets.revenue}
+                onChange={(event) => updateBudgetTarget("revenue", event.target.value)}
+                style={styles.tableInput}
+              />
+            </label>
+            <label style={styles.budgetField}>
+              Expense Budget
+              <input
+                type="number"
+                step="0.01"
+                value={budgetTargets.expense}
+                onChange={(event) => updateBudgetTarget("expense", event.target.value)}
+                style={styles.tableInput}
+              />
+            </label>
+            <label style={styles.budgetField}>
+              Asset Budget
+              <input
+                type="number"
+                step="0.01"
+                value={budgetTargets.totalAssets}
+                onChange={(event) => updateBudgetTarget("totalAssets", event.target.value)}
+                style={styles.tableInput}
+              />
+            </label>
+            <label style={styles.budgetField}>
+              Liability Budget
+              <input
+                type="number"
+                step="0.01"
+                value={budgetTargets.totalLiabilities}
+                onChange={(event) => updateBudgetTarget("totalLiabilities", event.target.value)}
+                style={styles.tableInput}
+              />
+            </label>
+            <label style={styles.budgetField}>
+              Equity Budget
+              <input
+                type="number"
+                step="0.01"
+                value={budgetTargets.equity}
+                onChange={(event) => updateBudgetTarget("equity", event.target.value)}
+                style={styles.tableInput}
+              />
+            </label>
+            <label style={styles.budgetField}>
+              Net Cash Budget
+              <input
+                type="number"
+                step="0.01"
+                value={budgetTargets.netCashFlow}
+                onChange={(event) => updateBudgetTarget("netCashFlow", event.target.value)}
+                style={styles.tableInput}
+              />
+            </label>
+          </div>
           <div style={styles.chartWrap}>
             <ResponsiveContainer width="100%" height={320}>
               <BarChart data={statementGraphData}>
                 <XAxis dataKey="name" />
                 <YAxis />
                 <Tooltip formatter={(value) => formatMoney(Number(value))} />
-                <Bar dataKey="value" fill="#2563eb" />
+                <Legend />
+                <Bar dataKey="actual" name="Actual" fill="#1d4ed8" />
+                <Bar dataKey="budget" name="Budget" fill="#60a5fa" />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -803,5 +880,19 @@ const styles = {
     marginBottom: 12,
     color: "#1d4e89",
     fontSize: 13,
+  },
+  budgetGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+    gap: 10,
+    marginBottom: 12,
+  },
+  budgetField: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+    color: "#1d4e89",
+    fontSize: 12,
+    fontWeight: 600,
   },
 };
