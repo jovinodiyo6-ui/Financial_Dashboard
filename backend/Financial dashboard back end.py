@@ -85,7 +85,10 @@ class AuditLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, nullable=False)
     action = db.Column(db.String(200), nullable=False)
-    time = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    time = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+    )
 
 
 with app.app_context():

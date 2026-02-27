@@ -10,7 +10,7 @@ import pytest
 def backend_module(tmp_path_factory):
     db_file = tmp_path_factory.mktemp("db") / "test_api.sqlite"
     os.environ["FLASK_ENV"] = "development"
-    os.environ["JWT_SECRET_KEY"] = "test-secret-key"
+    os.environ["JWT_SECRET_KEY"] = "test-secret-key-with-32-plus-bytes-123456"
     os.environ["DATABASE_URL"] = f"sqlite:///{db_file.as_posix()}"
 
     module_path = Path(__file__).resolve().parents[1] / "Financial dashboard back end.py"
