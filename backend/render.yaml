@@ -3,10 +3,13 @@ services:
     name: financial-dashboard-api
     env: python
     plan: free
+    rootDir: backend
     buildCommand: pip install -r requirements.txt
-    startCommand: python "Financial dashboard back end.py"
+    startCommand: gunicorn -w 4 -b 0.0.0.0:$PORT "Financial dashboard back end:app"
     envVars:
       - key: FLASK_ENV
         value: production
+      - key: JWT_SECRET_KEY
+        generateValue: true
       - key: DATABASE_URL
-        scope: run
+        sync: false

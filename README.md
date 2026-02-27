@@ -1,114 +1,99 @@
-# Financial Dashboard - SaaS Application
+# Financial Dashboard
 
-This project is organized into **backend** and **frontend** folders for clean separation of concerns.
+Flask + React financial analysis SaaS.
 
-## Project Structure
+## Repo Layout
 
-```
+```text
 PythonProject1/
-├── backend/                          # Flask API Server
-│   ├── Financial dashboard back end.py  # Main Flask app with API endpoints
-│   ├── Financial_dashboard.py        # Dashboard utilities
-│   ├── Correlation.py                # Data analysis utilities
-│   ├── transactions.db               # SQLite database
-│   ├── instance/                     # Flask instance folder
-│   └── saas.db                       # SaaS database
-│
-├── frontend/                         # React+Vite Frontend
-│   ├── package.json                  # Dependencies and scripts
-│   ├── sample-data.csv               # Sample data for testing
+├── backend/
+│   ├── Financial dashboard back end.py
+│   ├── requirements.txt
+│   ├── render.yaml
+│   ├── Procfile
+│   ├── .env.example
+│   └── instance/
+├── frontend/
+│   ├── index.html
+│   ├── package.json
+│   ├── .env.example
+│   ├── sample-data.csv
 │   └── src/
-│       ├── FinancialApp.jsx         # Main React component (with live user count)
-│       ├── main.jsx                  # Entry point
-│       └── index.html                # HTML template
-│
-└── README.md                         # This file
+│       ├── FinancialApp.jsx
+│       └── main.jsx
+├── Dockerfile
+├── docker-compose.yml
+└── README.md
 ```
 
-## Setup Instructions
+## Local Run
 
-### Backend Setup
+### Backend
 
-1. **Navigate to backend folder:**
-   ```bash
-   cd backend
-   ```
-
-2. **Install Python dependencies:**
-   ```bash
-   pip install flask flask-sqlalchemy flask-jwt-extended flask-bcrypt flask-cors pandas
-   ```
-
-3. **Run the Flask server:**
-   ```bash
-   python "Financial dashboard back end.py"
-   ```
-   
-   The backend will be available at `http://127.0.0.1:5000`
-
-### Frontend Setup
-
-1. **Navigate to frontend folder:**
-   ```bash
-   cd frontend
-   ```
-
-2. **Install Node dependencies:**
-   ```bash
-   npm install
-   ```
-
-3. **Run the development server:**
-   ```bash
-   npm run dev
-   ```
-   
-   The frontend will be available at `http://localhost:5173` (or similar - check terminal)
-
-4. **Build for production:**
-   ```bash
-   npm run build
-   ```
-
-## API Endpoints
-
-- `POST /register` - Register new organization and user
-- `POST /login` - Login user
-- `POST /analyze` - Upload CSV and generate financial report
-- `GET /analytics` - Get organization analytics
-- `GET /user-count` - Get live user count (polls every 3 seconds from frontend)
-- `POST /invite` - Invite new user to organization
-- `POST /apikey` - Create API key
-- `GET /admin/users` - List organization users (admin only)
-
-## Running the Full Stack
-
-**Terminal 1 - Backend:**
 ```bash
 cd backend
+pip install -r requirements.txt
 python "Financial dashboard back end.py"
 ```
 
-**Terminal 2 - Frontend:**
+Backend default URL: `http://127.0.0.1:5000`
+
+### Frontend
+
 ```bash
 cd frontend
+npm install
 npm run dev
 ```
 
-Then open your browser to the frontend URL shown in Terminal 2.
+Frontend default URL: `http://localhost:5173`
 
-## Features
+Set `VITE_API_URL` in `frontend/.env` if your backend URL differs.
 
-✅ User registration and authentication  
-✅ Financial data analysis from CSV uploads  
-✅ Real-time user count tracking  
-✅ Organization-based multi-tenancy  
-✅ Report generation and analytics dashboard  
-✅ API key management  
-✅ Audit logging  
+## API Endpoints
 
-## Database
+- `POST /register`
+- `POST /login`
+- `POST /analyze` (JWT)
+- `GET /analytics` (JWT)
+- `GET /user-count` (JWT)
+- `POST /invite` (JWT, owner/admin)
+- `POST /apikey` (JWT)
+- `GET /admin/users` (JWT, owner)
+- `GET /health`
 
-- **SQLite** for application data (`saas.db`)
-- **SQLite** for transaction data (`transactions.db`)
+## Environment Variables
 
+Backend (`backend/.env`):
+
+- `DATABASE_URL` (default: `sqlite:///saas.db`)
+- `JWT_SECRET_KEY` (required in production)
+- `FLASK_ENV` (`development` or `production`)
+- `CORS_ORIGINS` (optional, comma-separated)
+
+Supabase example:
+
+```env
+DATABASE_URL=postgresql://postgres:YOUR_SUPABASE_DB_PASSWORD@db.YOUR_PROJECT_REF.supabase.co:5432/postgres?sslmode=require
+```
+
+Frontend (`frontend/.env`):
+
+- `VITE_API_URL`
+
+## Deployment
+
+Use [DEPLOYMENT.md](DEPLOYMENT.md) for the complete Supabase + Render + Vercel steps.
+
+## Docker Compose
+
+```bash
+docker compose up --build
+```
+
+Starts local dev stack (Postgres + Flask + Vite).
+
+## Notes
+
+- Free tier analysis limit is currently `5` reports per organization.
+- Uploads expect CSV columns: `type` and `amount`.
