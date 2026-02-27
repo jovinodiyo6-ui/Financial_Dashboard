@@ -3,7 +3,8 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from flask_bcrypt import Bcrypt
 from flask_cors import CORS
-from sqlalchemy.exc import OperationalError
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 import hashlib
 import datetime
 import json
@@ -33,11 +34,20 @@ ENV = os.getenv("FLASK_ENV", "development")
 
 if ENV == "production" and not JWT_SECRET:
     raise RuntimeError("JWT_SECRET_KEY must be set in production")
+if ENV == "production" and DATABASE_URL.startswith("sqlite"):
+    raise RuntimeError("Production DATABASE_URL must use PostgreSQL, not SQLite")
 
 app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
 app.config["JWT_SECRET_KEY"] = JWT_SECRET or "dev-only-secret-change-me"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024  # 5 MB upload cap
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+    "pool_pre_ping": True,
+    "pool_recycle": 300,
+    "pool_timeout": 20,
+    "pool_size": 5,
+    "max_overflow": 5,
+}
 
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
@@ -98,6 +108,15 @@ def error_response(message, status=400):
     return {"error": message}, status
 
 
+def safe_commit():
+    try:
+        db.session.commit()
+        return True
+    except SQLAlchemyError:
+        db.session.rollback()
+        return False
+
+
 def get_user_from_token():
     try:
         user_id = int(get_jwt_identity())
@@ -108,7 +127,8 @@ def get_user_from_token():
 
 def log(user_id, action):
     db.session.add(AuditLog(user_id=user_id, action=action))
-    db.session.commit()
+    # Avoid crashing request flow because of non-critical audit logging issues.
+    safe_commit()
 
 
 def hash_key(raw_key):
@@ -145,19 +165,27 @@ def register():
 
     if not org_name or not email or not password:
         return error_response("org, email, and password are required")
+    if len(password) < 8:
+        return error_response("password must be at least 8 characters")
 
     if User.query.filter_by(email=email).first():
         return error_response("email already exists", 409)
 
-    org = Organization(name=org_name)
-    db.session.add(org)
-    db.session.commit()
-
     hashed_password = bcrypt.generate_password_hash(password).decode()
-
-    user = User(email=email, password=hashed_password, role="owner", org_id=org.id)
-    db.session.add(user)
-    db.session.commit()
+    try:
+        org = Organization(name=org_name)
+        db.session.add(org)
+        db.session.flush()
+        user = User(email=email, password=hashed_password, role="owner", org_id=org.id)
+        db.session.add(user)
+        if not safe_commit():
+            return error_response("database error during registration", 503)
+    except IntegrityError:
+        db.session.rollback()
+        return error_response("email already exists", 409)
+    except SQLAlchemyError:
+        db.session.rollback()
+        return error_response("database error during registration", 503)
 
     return {"msg": "registered"}
 
@@ -203,7 +231,8 @@ def invite():
 
     user = User(email=invite_email, password=hashed_password, role="member", org_id=me.org_id)
     db.session.add(user)
-    db.session.commit()
+    if not safe_commit():
+        return error_response("database error while inviting user", 503)
 
     log(me.id, "invited user")
     return {"msg": "user added"}
@@ -236,10 +265,9 @@ def analyze():
         return error_response(f"invalid csv: {exc}")
 
     org.usage += 1
-    db.session.commit()
-
     db.session.add(Report(org_id=org.id, data=json.dumps(result)))
-    db.session.commit()
+    if not safe_commit():
+        return error_response("database error while saving report", 503)
 
     log(user.id, "generated report")
     return result
@@ -257,7 +285,8 @@ def create_key():
     raw = os.urandom(24).hex()
 
     db.session.add(APIKey(org_id=user.org_id, key_hash=hash_key(raw)))
-    db.session.commit()
+    if not safe_commit():
+        return error_response("database error while creating API key", 503)
 
     log(user.id, "created api key")
     return {"api_key": raw}
@@ -327,7 +356,12 @@ def home():
 
 @app.route("/health")
 def health():
-    return {"status": "ok", "env": ENV}
+    try:
+        db.session.execute(text("SELECT 1"))
+        return {"status": "ok", "env": ENV, "database": "ok"}
+    except SQLAlchemyError:
+        db.session.rollback()
+        return {"status": "degraded", "env": ENV, "database": "error"}, 503
 
 
 # ---------------- RUN ----------------
