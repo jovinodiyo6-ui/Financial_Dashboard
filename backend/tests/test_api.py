@@ -88,6 +88,9 @@ def test_analyze_success_increments_usage(client):
     payload = response.get_json()
     assert payload["revenue"] == 100.0
     assert payload["expenses"] == 40.0
+    assert payload["assets_non_current_gross"] == 0.0
+    assert payload["accumulated_depreciation"] == 0.0
+    assert payload["assets_non_current_net"] == 0.0
 
     analytics = client.get("/analytics", headers=headers)
     assert analytics.status_code == 200
@@ -110,3 +113,27 @@ def test_analyze_invalid_csv_rejected(client):
 
     assert response.status_code == 400
     assert "invalid csv" in response.get_json()["error"]
+
+
+def test_analyze_non_current_asset_with_depreciation(client):
+    token = register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    csv_bytes = io.BytesIO(
+        b"type,subtype,amount,depreciation\nasset,non-current,1000,250\nasset,current,200,0\nliability,current,150,0\n"
+    )
+    response = client.post(
+        "/analyze",
+        headers=headers,
+        data={"file": (csv_bytes, "depreciation.csv")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["assets_non_current_gross"] == 1000.0
+    assert payload["accumulated_depreciation"] == 250.0
+    assert payload["assets_non_current_net"] == 750.0
+    assert payload["assets_current"] == 200.0
+    assert payload["total_assets"] == 950.0
+    assert payload["liabilities_current"] == 150.0

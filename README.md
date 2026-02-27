@@ -28,17 +28,30 @@ PythonProject1/
 
 ## Local Run
 
-### Backend
+### Run Together (Recommended)
+
+```bash
+pip install -r backend/requirements.txt
+npm install
+npm --prefix frontend install
+npm run dev
+```
+
+- Backend: `http://127.0.0.1:5000`
+- Frontend: `http://localhost:5173`
+- Frontend calls backend through Vite proxy (`/api -> 127.0.0.1:5000`)
+
+### Backend (Only)
 
 ```bash
 cd backend
 pip install -r requirements.txt
-python "Financial dashboard back end.py"
+python dev_server.py
 ```
 
 Backend default URL: `http://127.0.0.1:5000`
 
-### Frontend
+### Frontend (Only)
 
 ```bash
 cd frontend
@@ -46,9 +59,7 @@ npm install
 npm run dev
 ```
 
-Frontend default URL: `http://localhost:5173`
-
-Set `VITE_API_URL` in `frontend/.env` if your backend URL differs.
+Frontend default API base is `/api` (proxied to backend in dev).
 
 ## API Endpoints
 
@@ -79,7 +90,9 @@ DATABASE_URL=postgresql://postgres:YOUR_SUPABASE_DB_PASSWORD@db.YOUR_PROJECT_REF
 
 Frontend (`frontend/.env`):
 
-- `VITE_API_URL`
+- `VITE_API_URL` (default: `/api`)
+- `VITE_PROXY_TARGET` (default: `http://127.0.0.1:5000`)
+- `VITE_GOOGLE_CLIENT_ID` (required to show Google button)
 
 ## Deployment
 

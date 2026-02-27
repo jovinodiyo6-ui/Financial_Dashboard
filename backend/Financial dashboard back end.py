@@ -9,6 +9,8 @@ import hashlib
 import datetime
 import json
 import os
+import urllib.parse
+import urllib.request
 import pandas as pd
 from dotenv import load_dotenv
 
@@ -138,6 +140,32 @@ def hash_key(raw_key):
     return hashlib.sha256(raw_key.encode()).hexdigest()
 
 
+def verify_google_credential(credential):
+    tokeninfo_url = (
+        "https://oauth2.googleapis.com/tokeninfo?"
+        + urllib.parse.urlencode({"id_token": credential})
+    )
+    try:
+        with urllib.request.urlopen(tokeninfo_url, timeout=8) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        raise ValueError("invalid google credential") from exc
+
+    if payload.get("error") or payload.get("error_description"):
+        raise ValueError("invalid google credential")
+
+    expected_client_id = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+    token_audience = (payload.get("aud") or "").strip()
+    if expected_client_id and token_audience != expected_client_id:
+        raise ValueError("google client mismatch")
+
+    email_verified = payload.get("email_verified")
+    if email_verified not in (True, "true", "True"):
+        raise ValueError("google email is not verified")
+
+    return payload
+
+
 def calc(df):
     required = {"type", "amount"}
     missing = required.difference(df.columns)
@@ -147,13 +175,67 @@ def calc(df):
     df = df.copy()
     df["type"] = df["type"].astype(str).str.lower().str.strip()
     df["amount"] = pd.to_numeric(df["amount"], errors="coerce")
+    if "subtype" in df.columns:
+        df["subtype"] = df["subtype"].astype(str).str.lower().str.strip()
+    else:
+        df["subtype"] = ""
+
+    if "depreciation" in df.columns:
+        df["depreciation"] = pd.to_numeric(df["depreciation"], errors="coerce")
+        if df["depreciation"].isna().any():
+            raise ValueError("depreciation column must contain numeric values")
+        if (df["depreciation"] < 0).any():
+            raise ValueError("depreciation cannot be negative")
+    else:
+        df["depreciation"] = 0.0
 
     if df["amount"].isna().any():
         raise ValueError("amount column must contain numeric values")
 
+    current_assets = float(
+        df.loc[(df["type"] == "asset") & (df["subtype"] != "non-current"), "amount"].sum()
+    )
+    non_current_assets_gross = float(
+        df.loc[(df["type"] == "asset") & (df["subtype"] == "non-current"), "amount"].sum()
+    )
+    accumulated_depreciation = float(
+        df.loc[(df["type"] == "asset") & (df["subtype"] == "non-current"), "depreciation"].sum()
+    )
+    net_non_current_assets = max(0.0, non_current_assets_gross - accumulated_depreciation)
+    total_assets = current_assets + net_non_current_assets
+
+    current_liabilities = float(
+        df.loc[(df["type"] == "liability") & (df["subtype"] != "non-current"), "amount"].sum()
+    )
+    non_current_liabilities = float(
+        df.loc[(df["type"] == "liability") & (df["subtype"] == "non-current"), "amount"].sum()
+    )
+    total_liabilities = current_liabilities + non_current_liabilities
+
+    revenue = float(df.loc[df["type"] == "revenue", "amount"].sum())
+    expenses = float(df.loc[df["type"] == "expense", "amount"].sum())
+
+    # Return both snake_case and camelCase keys for easy frontend compatibility.
     return {
-        "revenue": float(df.loc[df["type"] == "revenue", "amount"].sum()),
-        "expenses": float(df.loc[df["type"] == "expense", "amount"].sum()),
+        "revenue": revenue,
+        "expenses": expenses,
+        "assets_current": current_assets,
+        "assets_non_current_gross": non_current_assets_gross,
+        "accumulated_depreciation": accumulated_depreciation,
+        "assets_non_current_net": net_non_current_assets,
+        "total_assets": total_assets,
+        "liabilities_current": current_liabilities,
+        "liabilities_non_current": non_current_liabilities,
+        "total_liabilities": total_liabilities,
+        "assetsCurrent": current_assets,
+        "assetsNonCurrentGross": non_current_assets_gross,
+        "nonCurrentAccumulatedDepreciation": accumulated_depreciation,
+        "assetsNonCurrent": net_non_current_assets,
+        "totalAssets": total_assets,
+        "liabilitiesCurrent": current_liabilities,
+        "liabilitiesNonCurrent": non_current_liabilities,
+        "totalLiabilities": total_liabilities,
+        "expense": expenses,
     }
 
 
@@ -208,6 +290,46 @@ def login():
         return error_response("bad login", 401)
 
     return {"token": create_access_token(identity=str(user.id))}
+
+
+@app.route("/auth/google", methods=["POST"])
+def auth_google():
+    data = request.get_json(silent=True) or {}
+    credential = (data.get("credential") or "").strip()
+    if not credential:
+        return error_response("google credential is required")
+
+    try:
+        google_payload = verify_google_credential(credential)
+    except ValueError as exc:
+        return error_response(str(exc), 401)
+
+    email = (google_payload.get("email") or "").strip().lower()
+    if not email:
+        return error_response("google account email missing", 401)
+
+    user = User.query.filter_by(email=email).first()
+    created = False
+    if not user:
+        derived_org = ((email.split("@")[0] if "@" in email else email) or "My Business")[:100]
+        random_password = os.urandom(24).hex()
+        hashed_password = bcrypt.generate_password_hash(random_password).decode()
+
+        try:
+            org = Organization(name=derived_org)
+            db.session.add(org)
+            db.session.flush()
+            user = User(email=email, password=hashed_password, role="owner", org_id=org.id)
+            db.session.add(user)
+            if not safe_commit():
+                return error_response("database error during google auth", 503)
+            created = True
+        except SQLAlchemyError:
+            db.session.rollback()
+            return error_response("database error during google auth", 503)
+
+    token = create_access_token(identity=str(user.id))
+    return {"token": token, "email": user.email, "created": created}
 
 
 # ---------------- INVITE USER ----------------
