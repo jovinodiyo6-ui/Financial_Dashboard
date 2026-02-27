@@ -24,6 +24,34 @@ const persistToken = (token) => {
   }
 };
 
+const INITIAL_LEDGER_ROWS = [
+  { id: 1, account: "Sales Revenue", type: "revenue", subtype: "operating", amount: "" },
+  { id: 2, account: "Rent Expense", type: "expense", subtype: "operating", amount: "" },
+  { id: 3, account: "Cash", type: "asset", subtype: "current", amount: "" },
+  { id: 4, account: "Equipment", type: "asset", subtype: "non-current", amount: "" },
+  { id: 5, account: "Accounts Payable", type: "liability", subtype: "current", amount: "" },
+  { id: 6, account: "Owner Capital", type: "capital", subtype: "equity", amount: "" },
+  { id: 7, account: "Drawings", type: "drawings", subtype: "equity", amount: "" },
+];
+
+const getSubtypeOptions = (type) => {
+  if (type === "asset" || type === "liability") {
+    return ["current", "non-current"];
+  }
+  if (type === "revenue" || type === "expense") {
+    return ["operating", "other"];
+  }
+  return ["equity"];
+};
+
+const toAmount = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const formatMoney = (value) =>
+  new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value || 0);
+
 export default function App() {
   const [token, setToken] = useState(() => readStoredToken());
   const [email, setEmail] = useState("");
@@ -40,6 +68,7 @@ export default function App() {
   const [userCountUpdating, setUserCountUpdating] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [infoMessage, setInfoMessage] = useState("");
+  const [ledgerRows, setLedgerRows] = useState(INITIAL_LEDGER_ROWS);
 
   const chartData = useMemo(() => {
     if (!stats) {
@@ -51,6 +80,92 @@ export default function App() {
       { name: "Usage", value: stats.usage || 0 },
     ];
   }, [stats]);
+
+  const statement = useMemo(() => {
+    const totals = {
+      revenue: 0,
+      expense: 0,
+      assetsCurrent: 0,
+      assetsNonCurrent: 0,
+      liabilitiesCurrent: 0,
+      liabilitiesNonCurrent: 0,
+      capital: 0,
+      drawings: 0,
+    };
+
+    for (const row of ledgerRows) {
+      const amount = toAmount(row.amount);
+      if (!amount) {
+        continue;
+      }
+
+      if (row.type === "revenue") {
+        totals.revenue += amount;
+      } else if (row.type === "expense") {
+        totals.expense += amount;
+      } else if (row.type === "asset") {
+        if (row.subtype === "non-current") {
+          totals.assetsNonCurrent += amount;
+        } else {
+          totals.assetsCurrent += amount;
+        }
+      } else if (row.type === "liability") {
+        if (row.subtype === "non-current") {
+          totals.liabilitiesNonCurrent += amount;
+        } else {
+          totals.liabilitiesCurrent += amount;
+        }
+      } else if (row.type === "capital") {
+        totals.capital += amount;
+      } else if (row.type === "drawings") {
+        totals.drawings += amount;
+      }
+    }
+
+    const profit = totals.revenue - totals.expense;
+    const equity = totals.capital + profit - totals.drawings;
+    const totalAssets = totals.assetsCurrent + totals.assetsNonCurrent;
+    const totalLiabilities = totals.liabilitiesCurrent + totals.liabilitiesNonCurrent;
+    const liabilitiesAndEquity = totalLiabilities + equity;
+
+    const operatingCashInflows = totals.revenue;
+    const operatingCashOutflows = totals.expense;
+    const netOperatingCashFlow = operatingCashInflows - operatingCashOutflows;
+    const investingCashOutflows = totals.assetsNonCurrent;
+    const financingInflows = totals.capital;
+    const financingOutflows = totals.drawings;
+    const netCashFlow = netOperatingCashFlow - investingCashOutflows + financingInflows - financingOutflows;
+
+    return {
+      ...totals,
+      profit,
+      equity,
+      totalAssets,
+      totalLiabilities,
+      liabilitiesAndEquity,
+      balanceDelta: totalAssets - liabilitiesAndEquity,
+      operatingCashInflows,
+      operatingCashOutflows,
+      netOperatingCashFlow,
+      investingCashOutflows,
+      financingInflows,
+      financingOutflows,
+      netCashFlow,
+    };
+  }, [ledgerRows]);
+
+  const statementGraphData = useMemo(
+    () => [
+      { name: "Revenue", value: statement.revenue },
+      { name: "Expenses", value: statement.expense },
+      { name: "Profit", value: statement.profit },
+      { name: "Assets", value: statement.totalAssets },
+      { name: "Liabilities", value: statement.totalLiabilities },
+      { name: "Equity", value: statement.equity },
+      { name: "Net Cash Flow", value: statement.netCashFlow },
+    ],
+    [statement],
+  );
 
   const authorizedFetch = async (path, options = {}) => {
     const headers = {
@@ -200,6 +315,38 @@ export default function App() {
     }
   };
 
+  const updateLedgerRow = (rowId, key, value) => {
+    setLedgerRows((rows) =>
+      rows.map((row) => {
+        if (row.id !== rowId) {
+          return row;
+        }
+
+        if (key === "type") {
+          const nextType = value;
+          const nextSubtype = getSubtypeOptions(nextType)[0];
+          return { ...row, type: nextType, subtype: nextSubtype };
+        }
+
+        return { ...row, [key]: value };
+      }),
+    );
+  };
+
+  const addLedgerRow = () => {
+    setLedgerRows((rows) => {
+      const nextId = rows.length ? Math.max(...rows.map((row) => row.id)) + 1 : 1;
+      return [
+        ...rows,
+        { id: nextId, account: "", type: "expense", subtype: "operating", amount: "" },
+      ];
+    });
+  };
+
+  const deleteLedgerRow = (rowId) => {
+    setLedgerRows((rows) => rows.filter((row) => row.id !== rowId));
+  };
+
   useEffect(() => {
     if (!token) {
       return;
@@ -245,7 +392,7 @@ export default function App() {
 
         <div style={styles.authShell}>
           <div style={{ ...styles.card, ...styles.authCard }} className="auth-card">
-            <h2>NavySky Financial Suite</h2>
+            <h2>Financial Analytics Platform</h2>
             <input
               placeholder="Email"
               value={email}
@@ -312,10 +459,10 @@ export default function App() {
       `}</style>
 
       <div style={styles.sidebar} className="sidebar">
-        <h2>NavySky</h2>
+        <h2>Financial Analytics Platform</h2>
         <p>Dashboard</p>
         <p>Reports</p>
-        <p>Analytics</p>
+        <p>Statements</p>
         <button onClick={logout} style={styles.secondaryButton}>Logout</button>
       </div>
 
@@ -356,6 +503,126 @@ export default function App() {
             </div>
           </div>
         ) : null}
+
+        <div style={styles.card}>
+          <div style={styles.statementHeader}>
+            <h3>Excel-Like Financial Input Sheet</h3>
+            <button onClick={addLedgerRow} style={styles.button}>Add Row</button>
+          </div>
+          <div style={styles.tableWrap}>
+            <table style={styles.table}>
+              <thead>
+                <tr>
+                  <th style={styles.th}>Account</th>
+                  <th style={styles.th}>Type</th>
+                  <th style={styles.th}>Class</th>
+                  <th style={styles.th}>Amount</th>
+                  <th style={styles.th}>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {ledgerRows.map((row) => (
+                  <tr key={row.id}>
+                    <td style={styles.td}>
+                      <input
+                        value={row.account}
+                        onChange={(event) => updateLedgerRow(row.id, "account", event.target.value)}
+                        style={styles.tableInput}
+                        placeholder="Account name"
+                      />
+                    </td>
+                    <td style={styles.td}>
+                      <select
+                        value={row.type}
+                        onChange={(event) => updateLedgerRow(row.id, "type", event.target.value)}
+                        style={styles.tableInput}
+                      >
+                        <option value="revenue">Revenue</option>
+                        <option value="expense">Expense</option>
+                        <option value="asset">Asset</option>
+                        <option value="liability">Liability</option>
+                        <option value="capital">Capital</option>
+                        <option value="drawings">Drawings</option>
+                      </select>
+                    </td>
+                    <td style={styles.td}>
+                      <select
+                        value={row.subtype}
+                        onChange={(event) => updateLedgerRow(row.id, "subtype", event.target.value)}
+                        style={styles.tableInput}
+                      >
+                        {getSubtypeOptions(row.type).map((option) => (
+                          <option key={option} value={option}>{option}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td style={styles.td}>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={row.amount}
+                        onChange={(event) => updateLedgerRow(row.id, "amount", event.target.value)}
+                        style={styles.tableInput}
+                        placeholder="0.00"
+                      />
+                    </td>
+                    <td style={styles.td}>
+                      <button onClick={() => deleteLedgerRow(row.id)} style={styles.deleteButton}>Remove</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div style={styles.card}>
+          <h3>Statement of Profit or Loss</h3>
+          <p>Total Revenue: {formatMoney(statement.revenue)}</p>
+          <p>Total Expenses: {formatMoney(statement.expense)}</p>
+          <p style={styles.totalLine}>Net Profit / (Loss): {formatMoney(statement.profit)}</p>
+        </div>
+
+        <div style={styles.card}>
+          <h3>Statement of Financial Position</h3>
+          <p>Current Assets: {formatMoney(statement.assetsCurrent)}</p>
+          <p>Non-Current Assets: {formatMoney(statement.assetsNonCurrent)}</p>
+          <p style={styles.totalLine}>Total Assets: {formatMoney(statement.totalAssets)}</p>
+          <hr />
+          <p>Current Liabilities: {formatMoney(statement.liabilitiesCurrent)}</p>
+          <p>Non-Current Liabilities: {formatMoney(statement.liabilitiesNonCurrent)}</p>
+          <p>Total Liabilities: {formatMoney(statement.totalLiabilities)}</p>
+          <p>Equity (Capital + Profit - Drawings): {formatMoney(statement.equity)}</p>
+          <p style={styles.totalLine}>Total Liabilities + Equity: {formatMoney(statement.liabilitiesAndEquity)}</p>
+          <p style={Math.abs(statement.balanceDelta) < 0.01 ? styles.infoText : styles.errorText}>
+            Balance Check (Assets - Liabilities & Equity): {formatMoney(statement.balanceDelta)}
+          </p>
+        </div>
+
+        <div style={styles.card}>
+          <h3>Statement of Cash Flow</h3>
+          <p>Operating Cash Inflows (Revenue): {formatMoney(statement.operatingCashInflows)}</p>
+          <p>Operating Cash Outflows (Expenses): {formatMoney(statement.operatingCashOutflows)}</p>
+          <p>Net Operating Cash Flow: {formatMoney(statement.netOperatingCashFlow)}</p>
+          <p>Investing Cash Outflows (Non-current Assets): {formatMoney(statement.investingCashOutflows)}</p>
+          <p>Financing Inflows (Capital): {formatMoney(statement.financingInflows)}</p>
+          <p>Financing Outflows (Drawings): {formatMoney(statement.financingOutflows)}</p>
+          <p style={styles.totalLine}>Net Cash Flow: {formatMoney(statement.netCashFlow)}</p>
+        </div>
+
+        <div style={styles.card}>
+          <h3>Financial Statement Graph</h3>
+          <div style={styles.chartWrap}>
+            <ResponsiveContainer width="100%" height={320}>
+              <BarChart data={statementGraphData}>
+                <XAxis dataKey="name" />
+                <YAxis />
+                <Tooltip formatter={(value) => formatMoney(Number(value))} />
+                <Bar dataKey="value" fill="#2563eb" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -440,30 +707,31 @@ const styles = {
   liveUserCard: {
     background: "linear-gradient(135deg, #0b1f3a 0%, #1d4e89 55%, #60a5fa 100%)",
     color: "white",
-    padding: 24,
+    padding: 10,
     borderRadius: 12,
     marginBottom: 16,
-    boxShadow: "0 10px 20px rgba(45, 106, 79, 0.35)",
+    boxShadow: "0 4px 10px rgba(11, 31, 58, 0.2)",
+    maxWidth: 260,
   },
   userCountDisplay: {
     display: "flex",
     alignItems: "center",
-    gap: 15,
-    marginTop: 12,
-    marginBottom: 12,
+    gap: 8,
+    marginTop: 6,
+    marginBottom: 6,
   },
   userCountNumber: {
-    fontSize: 44,
+    fontSize: 18,
     fontWeight: "bold",
     fontFamily: "Consolas, monospace",
   },
   pulse: {
     color: "#dbeafe",
-    fontSize: 20,
+    fontSize: 10,
     animation: "pulse 1.5s infinite",
   },
   updateIndicator: {
-    fontSize: 12,
+    fontSize: 10,
     opacity: 0.9,
     margin: 0,
   },
@@ -476,5 +744,50 @@ const styles = {
     margin: 0,
     color: "#1d4e89",
     fontWeight: 600,
+  },
+  tableWrap: {
+    overflowX: "auto",
+  },
+  table: {
+    width: "100%",
+    borderCollapse: "collapse",
+    minWidth: 760,
+  },
+  th: {
+    textAlign: "left",
+    padding: 10,
+    borderBottom: "1px solid #dbeafe",
+    color: "#0b1f3a",
+  },
+  td: {
+    padding: 8,
+    borderBottom: "1px solid #eff6ff",
+  },
+  tableInput: {
+    width: "100%",
+    padding: 8,
+    borderRadius: 6,
+    border: "1px solid #bfdbfe",
+    background: "#f8fbff",
+  },
+  deleteButton: {
+    padding: "6px 12px",
+    borderRadius: 6,
+    border: "1px solid #fecaca",
+    background: "#fff1f2",
+    color: "#9b2226",
+    cursor: "pointer",
+  },
+  statementHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 12,
+    gap: 12,
+    flexWrap: "wrap",
+  },
+  totalLine: {
+    fontWeight: 700,
+    color: "#0b1f3a",
   },
 };
