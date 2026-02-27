@@ -491,8 +491,8 @@ export default function App() {
         {stats ? (
           <div style={styles.card}>
             <h3>Analytics</h3>
-            <div style={styles.chartWrap}>
-              <ResponsiveContainer width="100%" height={300}>
+            <div style={styles.analyticsChartWrap}>
+              <ResponsiveContainer width="100%" height={200}>
                 <BarChart data={chartData}>
                   <XAxis dataKey="name" />
                   <YAxis />
@@ -506,7 +506,7 @@ export default function App() {
 
         <div style={styles.card}>
           <div style={styles.statementHeader}>
-            <h3>Excel-Like Financial Input Sheet</h3>
+            <h3>Financial Input Sheet</h3>
             <button onClick={addLedgerRow} style={styles.button}>Add Row</button>
           </div>
           <div style={styles.tableWrap}>
@@ -612,6 +612,9 @@ export default function App() {
 
         <div style={styles.card}>
           <h3>Financial Statement Graph</h3>
+          <p style={styles.graphNote}>
+            Bar/Column Charts: Best for comparing distinct categories, such as sales performance by region, or comparing actual costs against budgeted costs.
+          </p>
           <div style={styles.chartWrap}>
             <ResponsiveContainer width="100%" height={320}>
               <BarChart data={statementGraphData}>
@@ -677,6 +680,11 @@ const styles = {
   chartWrap: {
     width: "100%",
     minHeight: 300,
+  },
+  analyticsChartWrap: {
+    width: "100%",
+    maxWidth: 420,
+    minHeight: 200,
   },
   input: {
     display: "block",
@@ -789,5 +797,11 @@ const styles = {
   totalLine: {
     fontWeight: 700,
     color: "#0b1f3a",
+  },
+  graphNote: {
+    marginTop: 0,
+    marginBottom: 12,
+    color: "#1d4e89",
+    fontSize: 13,
   },
 };
