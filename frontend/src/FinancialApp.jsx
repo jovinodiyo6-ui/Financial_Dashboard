@@ -4,6 +4,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } fro
 const API_URL = (import.meta.env.VITE_API_URL || "/api").trim();
 const TOKEN_KEY = "financepro_token";
 const LAST_EMAIL_KEY = "financepro_last_email";
+const THEME_KEY = "financepro_theme";
 const GOOGLE_CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID || "").trim();
 
 const readStoredToken = () => {
@@ -41,6 +42,23 @@ const persistEmail = (email) => {
     } else {
       localStorage.removeItem(LAST_EMAIL_KEY);
     }
+  } catch {
+    // Ignore storage failures.
+  }
+};
+
+const readStoredTheme = () => {
+  try {
+    const stored = localStorage.getItem(THEME_KEY);
+    return stored === "dark" ? "dark" : "light";
+  } catch {
+    return "light";
+  }
+};
+
+const persistTheme = (theme) => {
+  try {
+    localStorage.setItem(THEME_KEY, theme === "dark" ? "dark" : "light");
   } catch {
     // Ignore storage failures.
   }
@@ -179,6 +197,7 @@ export default function App() {
   const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [showSignupPassword, setShowSignupPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [themeMode, setThemeMode] = useState(() => readStoredTheme());
   const googleButtonRef = useRef(null);
 
   const [file, setFile] = useState(null);
@@ -187,12 +206,18 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(false);
   const [userCount, setUserCount] = useState(0);
   const [userCountUpdating, setUserCountUpdating] = useState(false);
+  const [maintenance, setMaintenance] = useState({
+    maintenance: false,
+    message: "[System Under Maintainance]",
+  });
+  const [extracting, setExtracting] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [infoMessage, setInfoMessage] = useState("");
   const [ledgerRows, setLedgerRows] = useState(INITIAL_LEDGER_ROWS);
   const [budgetTargets, setBudgetTargets] = useState(INITIAL_BUDGET_TARGETS);
   const [quickAmount, setQuickAmount] = useState("");
   const [quickEntryId, setQuickEntryId] = useState(QUICK_ENTRY_TEMPLATES[0].id);
+  const isDarkMode = themeMode === "dark";
 
   const chartData = useMemo(() => {
     if (!stats) {
@@ -568,6 +593,25 @@ export default function App() {
     setStats(data);
   };
 
+  const loadSystemStatus = async () => {
+    const response = await fetch(`${API_URL}/system-status`);
+    let payload = {};
+    try {
+      payload = await response.json();
+    } catch {
+      payload = {};
+    }
+
+    if (!response.ok) {
+      throw new Error(payload.error || "Failed to read system status");
+    }
+
+    setMaintenance({
+      maintenance: Boolean(payload.maintenance),
+      message: payload.message || "[System Under Maintainance]",
+    });
+  };
+
   const loadLiveUserCount = async () => {
     try {
       setUserCountUpdating(true);
@@ -584,8 +628,13 @@ export default function App() {
     setErrorMessage("");
     setInfoMessage("");
 
+    if (maintenance.maintenance) {
+      setErrorMessage(maintenance.message || "[System Under Maintainance]");
+      return;
+    }
+
     if (!file) {
-      setErrorMessage("Upload a CSV file first.");
+      setErrorMessage("Upload a file first.");
       return;
     }
 
@@ -607,6 +656,100 @@ export default function App() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const extractForCalculation = async () => {
+    setErrorMessage("");
+    setInfoMessage("");
+
+    if (maintenance.maintenance) {
+      setErrorMessage(maintenance.message || "[System Under Maintainance]");
+      return;
+    }
+
+    if (!file) {
+      setErrorMessage("Upload a file first (CSV, XLS/XLSX, TXT, or JSON).");
+      return;
+    }
+
+    setExtracting(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+
+      const data = await authorizedFetch("/extract-ledger", {
+        method: "POST",
+        body: form,
+      });
+
+      if (!Array.isArray(data.ledger_rows) || data.ledger_rows.length === 0) {
+        throw new Error("No usable ledger rows were extracted.");
+      }
+
+      setLedgerRows(
+        data.ledger_rows.map((row, index) => ({
+          id: index + 1,
+          account: row.account || "",
+          type: row.type || "expense",
+          subtype: row.subtype || "operating",
+          amount: row.amount ?? "",
+          depreciation: row.depreciation ?? "",
+        })),
+      );
+      setInfoMessage(`Extracted ${data.ledger_rows.length} row(s) for calculations.`);
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to extract file for calculations");
+    } finally {
+      setExtracting(false);
+    }
+  };
+
+  const printReceipt = () => {
+    const popup = window.open("", "_blank", "width=780,height=900");
+    if (!popup) {
+      setErrorMessage("Popup blocked. Allow popups to print the receipt.");
+      return;
+    }
+
+    const now = new Date();
+    const receiptHtml = `
+      <!doctype html>
+      <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>FinancePro Receipt</title>
+        <style>
+          body { font-family: Arial, sans-serif; margin: 32px; color: #0b1f3a; }
+          h1 { margin: 0 0 10px; font-size: 24px; }
+          p { margin: 4px 0; }
+          .meta { margin-bottom: 16px; color: #425466; }
+          .line { display: flex; justify-content: space-between; border-bottom: 1px solid #e5edf8; padding: 8px 0; }
+          .total { font-weight: 700; }
+        </style>
+      </head>
+      <body>
+        <h1>Financial Receipt</h1>
+        <p class="meta">Date: ${now.toLocaleString()}</p>
+        <p class="meta">User: ${email || "N/A"}</p>
+        <div class="line"><span>Total Revenue</span><span>${formatMoney(statement.revenue)}</span></div>
+        <div class="line"><span>Total Expenses</span><span>${formatMoney(statement.totalExpensesDetailed || statement.expense)}</span></div>
+        <div class="line"><span>Total Assets</span><span>${formatMoney(statement.totalAssets)}</span></div>
+        <div class="line"><span>Total Liabilities</span><span>${formatMoney(statement.totalLiabilities)}</span></div>
+        <div class="line"><span>Equity</span><span>${formatMoney(statement.equity)}</span></div>
+        <div class="line total"><span>Net Cash Flow</span><span>${formatMoney(statement.netCashFromOperations || statement.netCashFlow)}</span></div>
+      </body>
+      </html>
+    `;
+
+    popup.document.open();
+    popup.document.write(receiptHtml);
+    popup.document.close();
+    popup.focus();
+    popup.print();
+  };
+
+  const toggleTheme = () => {
+    setThemeMode((current) => (current === "dark" ? "light" : "dark"));
   };
 
   const updateLedgerRow = (rowId, key, value) => {
@@ -690,6 +833,79 @@ export default function App() {
   };
 
   useEffect(() => {
+    let active = true;
+
+    const checkSystemStatus = async () => {
+      try {
+        await loadSystemStatus();
+      } catch {
+        if (active) {
+          setMaintenance({ maintenance: false, message: "[System Under Maintainance]" });
+        }
+      }
+    };
+
+    checkSystemStatus();
+    const interval = setInterval(checkSystemStatus, 30000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    persistTheme(themeMode);
+  }, [themeMode]);
+
+  const themedStyles = useMemo(() => {
+    if (!isDarkMode) {
+      return styles;
+    }
+
+    return {
+      ...styles,
+      center: { ...styles.center, background: "#08111f" },
+      authSingleCard: {
+        ...styles.authSingleCard,
+        background: "#121d2d",
+        border: "1px solid #22314a",
+        boxShadow: "0 8px 22px rgba(0, 0, 0, 0.4)",
+      },
+      authTitle: { ...styles.authTitle, color: "#e2e8f0" },
+      authInput: {
+        ...styles.authInput,
+        background: "#0f172a",
+        border: "1px solid #334155",
+        color: "#e2e8f0",
+      },
+      eyeToggle: { ...styles.eyeToggle, color: "#cbd5e1" },
+      authPrimaryButton: { ...styles.authPrimaryButton, background: "#2563eb" },
+      authSwitchText: { ...styles.authSwitchText, color: "#cbd5e1" },
+      authDivider: { ...styles.authDivider, color: "#94a3b8" },
+      inlineLink: { ...styles.inlineLink, color: "#93c5fd" },
+      linkButton: { ...styles.linkButton, color: "#93c5fd" },
+      themeToggle: { ...styles.themeToggle, border: "1px solid #60a5fa", color: "#bfdbfe" },
+      layout: { ...styles.layout, background: "#0b1220" },
+      sidebar: { ...styles.sidebar, background: "#0f172a", color: "#e2e8f0" },
+      main: { ...styles.main, background: "#111827", color: "#e5e7eb" },
+      card: { ...styles.card, background: "#1f2937", color: "#e5e7eb", boxShadow: "0 8px 20px rgba(0,0,0,0.3)" },
+      input: { ...styles.input, background: "#0f172a", color: "#e5e7eb", border: "1px solid #334155" },
+      button: { ...styles.button, background: "#2563eb", color: "#ffffff" },
+      secondaryButton: { ...styles.secondaryButton, border: "1px solid #60a5fa", color: "#e2e8f0" },
+      graphNote: { ...styles.graphNote, color: "#bfdbfe" },
+      infoText: { ...styles.infoText, color: "#93c5fd" },
+      warningText: { ...styles.warningText, color: "#fed7aa", background: "#3b2a15", border: "1px solid #b45309" },
+      th: { ...styles.th, borderBottom: "1px solid #334155", color: "#e2e8f0" },
+      td: { ...styles.td, borderBottom: "1px solid #334155" },
+      tableInput: { ...styles.tableInput, background: "#0f172a", border: "1px solid #334155", color: "#e2e8f0" },
+      updateIndicator: { ...styles.updateIndicator, color: "#cbd5e1" },
+      totalLine: { ...styles.totalLine, color: "#e2e8f0" },
+      sectionLine: { ...styles.sectionLine, color: "#93c5fd" },
+      budgetField: { ...styles.budgetField, color: "#bfdbfe" },
+    };
+  }, [isDarkMode]);
+
+  useEffect(() => {
     if (!token) {
       return;
     }
@@ -750,9 +966,12 @@ export default function App() {
 
   if (!token) {
     return (
-      <div style={styles.center}>
-        <div style={styles.authSingleCard}>
-          <h2 style={styles.authTitle}>{authMode === "login" ? "Login" : "Signup"}</h2>
+      <div style={themedStyles.center}>
+        <div style={themedStyles.authSingleCard}>
+          <h2 style={themedStyles.authTitle}>{authMode === "login" ? "Login" : "Signup"}</h2>
+          <button type="button" onClick={toggleTheme} style={themedStyles.themeToggle}>
+            Switch to {isDarkMode ? "Light" : "Dark"} Mode
+          </button>
 
           {authMode === "login" ? (
             <>
@@ -760,45 +979,45 @@ export default function App() {
                 placeholder="Email"
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
-                style={styles.authInput}
+                style={themedStyles.authInput}
               />
-              <div style={styles.passwordWrap}>
+              <div style={themedStyles.passwordWrap}>
                 <input
                   placeholder="Password"
                   type={showLoginPassword ? "text" : "password"}
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
-                  style={styles.authInput}
+                  style={themedStyles.authInput}
                 />
                 <button
                   type="button"
                   onClick={() => setShowLoginPassword((value) => !value)}
-                  style={styles.eyeToggle}
+                  style={themedStyles.eyeToggle}
                 >
                   {showLoginPassword ? "Hide" : "Show"}
                 </button>
               </div>
               <button
                 type="button"
-                style={styles.linkButton}
+                style={themedStyles.linkButton}
                 onClick={() => setInfoMessage("Password reset flow can be added next.")}
               >
                 Forgot password?
               </button>
-              <button onClick={login} style={styles.authPrimaryButton} disabled={authLoading}>
+              <button onClick={login} style={themedStyles.authPrimaryButton} disabled={authLoading}>
                 {authLoading ? "Signing in..." : "Login"}
               </button>
               {GOOGLE_CLIENT_ID ? (
                 <>
-                  <div style={styles.authDivider}><span>or</span></div>
-                  <div ref={googleButtonRef} style={styles.googleButtonWrap} />
+                  <div style={themedStyles.authDivider}><span>or</span></div>
+                  <div ref={googleButtonRef} style={themedStyles.googleButtonWrap} />
                 </>
               ) : null}
-              <p style={styles.authSwitchText}>
+              <p style={themedStyles.authSwitchText}>
                 Don't have an account?{" "}
                 <button
                   type="button"
-                  style={styles.inlineLink}
+                  style={themedStyles.inlineLink}
                   onClick={() => {
                     setAuthMode("signup");
                     setErrorMessage("");
@@ -815,36 +1034,36 @@ export default function App() {
                 placeholder="Email"
                 value={registerEmail}
                 onChange={(event) => setRegisterEmail(event.target.value)}
-                style={styles.authInput}
+                style={themedStyles.authInput}
               />
-              <div style={styles.passwordWrap}>
+              <div style={themedStyles.passwordWrap}>
                 <input
                   placeholder="Create password"
                   type={showSignupPassword ? "text" : "password"}
                   value={registerPassword}
                   onChange={(event) => setRegisterPassword(event.target.value)}
-                  style={styles.authInput}
+                  style={themedStyles.authInput}
                 />
                 <button
                   type="button"
                   onClick={() => setShowSignupPassword((value) => !value)}
-                  style={styles.eyeToggle}
+                  style={themedStyles.eyeToggle}
                 >
                   {showSignupPassword ? "Hide" : "Show"}
                 </button>
               </div>
-              <div style={styles.passwordWrap}>
+              <div style={themedStyles.passwordWrap}>
                 <input
                   placeholder="Confirm password"
                   type={showConfirmPassword ? "text" : "password"}
                   value={confirmPassword}
                   onChange={(event) => setConfirmPassword(event.target.value)}
-                  style={styles.authInput}
+                  style={themedStyles.authInput}
                 />
                 <button
                   type="button"
                   onClick={() => setShowConfirmPassword((value) => !value)}
-                  style={styles.eyeToggle}
+                  style={themedStyles.eyeToggle}
                 >
                   {showConfirmPassword ? "Hide" : "Show"}
                 </button>
@@ -853,22 +1072,22 @@ export default function App() {
                 placeholder="Organization (optional)"
                 value={org}
                 onChange={(event) => setOrg(event.target.value)}
-                style={styles.authInput}
+                style={themedStyles.authInput}
               />
-              <button onClick={register} style={styles.authPrimaryButton} disabled={authLoading}>
+              <button onClick={register} style={themedStyles.authPrimaryButton} disabled={authLoading}>
                 {authLoading ? "Creating..." : "Signup"}
               </button>
               {GOOGLE_CLIENT_ID ? (
                 <>
-                  <div style={styles.authDivider}><span>or</span></div>
-                  <div ref={googleButtonRef} style={styles.googleButtonWrap} />
+                  <div style={themedStyles.authDivider}><span>or</span></div>
+                  <div ref={googleButtonRef} style={themedStyles.googleButtonWrap} />
                 </>
               ) : null}
-              <p style={styles.authSwitchText}>
+              <p style={themedStyles.authSwitchText}>
                 Already have an account?{" "}
                 <button
                   type="button"
-                  style={styles.inlineLink}
+                  style={themedStyles.inlineLink}
                   onClick={() => {
                     setAuthMode("login");
                     setErrorMessage("");
@@ -882,60 +1101,83 @@ export default function App() {
           )}
         </div>
 
-        {errorMessage ? <p style={styles.errorText}>{errorMessage}</p> : null}
-        {infoMessage ? <p style={styles.infoText}>{infoMessage}</p> : null}
+        {maintenance.maintenance ? <p style={themedStyles.warningText}>{maintenance.message}</p> : null}
+        {errorMessage ? <p style={themedStyles.errorText}>{errorMessage}</p> : null}
+        {infoMessage ? <p style={themedStyles.infoText}>{infoMessage}</p> : null}
       </div>
     );
   }
 
   return (
-    <div style={styles.layout}>
+    <div style={themedStyles.layout} className="app-layout">
       <style>{`
         @keyframes pulse {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.45; }
         }
         @media (max-width: 1024px) {
-          .app-layout { flex-direction: column; height: auto !important; }
+          .app-layout { flex-direction: column; min-height: 100vh; }
           .sidebar { width: 100% !important; }
           .main { padding: 20px !important; }
         }
       `}</style>
 
-      <div style={styles.sidebar} className="sidebar">
+      <div style={themedStyles.sidebar} className="sidebar">
         <h2>Financial Analytics Platform</h2>
         <p>Dashboard</p>
         <p>Reports</p>
         <p>Statements</p>
-        <button onClick={logout} style={styles.secondaryButton}>Logout</button>
+        <button onClick={toggleTheme} style={themedStyles.secondaryButton}>
+          {isDarkMode ? "Light Mode" : "Dark Mode"}
+        </button>
+        <button onClick={logout} style={themedStyles.secondaryButton}>Logout</button>
       </div>
 
-      <div style={styles.main} className="main app-layout">
+      <div style={themedStyles.main} className="main">
         <h1>Executive Dashboard</h1>
 
-        {errorMessage ? <p style={styles.errorText}>{errorMessage}</p> : null}
-        {infoMessage ? <p style={styles.infoText}>{infoMessage}</p> : null}
+        {maintenance.maintenance ? <p style={themedStyles.warningText}>{maintenance.message}</p> : null}
+        {errorMessage ? <p style={themedStyles.errorText}>{errorMessage}</p> : null}
+        {infoMessage ? <p style={themedStyles.infoText}>{infoMessage}</p> : null}
 
-        <div style={styles.liveUserCard}>
+        <div style={themedStyles.liveUserCard}>
           <h3>Live Active Users</h3>
-          <div style={styles.userCountDisplay}>
-            <span style={styles.userCountNumber}>{userCount}</span>
-            {userCountUpdating && <span style={styles.pulse}>●</span>}
+          <div style={themedStyles.userCountDisplay}>
+            <span style={themedStyles.userCountNumber}>{userCount}</span>
+            {userCountUpdating && <span style={themedStyles.pulse}>●</span>}
           </div>
-          <p style={styles.updateIndicator}>Updates every 3 seconds</p>
+          <p style={themedStyles.updateIndicator}>Updates every 3 seconds</p>
         </div>
 
-        <div style={styles.card}>
-          <input type="file" accept=".csv" onChange={(event) => setFile(event.target.files?.[0] || null)} />
-          <button onClick={analyze} style={styles.button} disabled={loading}>
-            {loading ? "Processing..." : "Generate Report"}
-          </button>
+        <div style={themedStyles.card}>
+          <input
+            type="file"
+            accept=".csv,.txt,.json,.xls,.xlsx"
+            onChange={(event) => setFile(event.target.files?.[0] || null)}
+          />
+          <p style={themedStyles.graphNote}>Upload external files for analytics or ledger calculations.</p>
+          <div style={themedStyles.actionRow}>
+            <button onClick={analyze} style={themedStyles.button} disabled={loading || maintenance.maintenance}>
+              {loading ? "Processing..." : "Generate Report"}
+            </button>
+            <button
+              onClick={extractForCalculation}
+              style={themedStyles.button}
+              disabled={extracting || maintenance.maintenance}
+            >
+              {extracting ? "Extracting..." : "Extract For Calculation"}
+            </button>
+            <button onClick={printReceipt} style={themedStyles.button}>
+              Print Receipt
+            </button>
+          </div>
+          {file ? <p style={themedStyles.updateIndicator}>Selected file: {file.name}</p> : null}
         </div>
 
         {stats ? (
-          <div style={styles.card}>
+          <div style={themedStyles.card}>
             <h3>Analytics</h3>
-            <div style={styles.analyticsChartWrap}>
+            <div style={themedStyles.analyticsChartWrap}>
               <ResponsiveContainer width="100%" height={200}>
                 <BarChart data={chartData}>
                   <XAxis dataKey="name" />
@@ -948,16 +1190,16 @@ export default function App() {
           </div>
         ) : null}
 
-        <div style={styles.card}>
+        <div style={themedStyles.card}>
           <h3>Quick Accounting Entry</h3>
-          <p style={styles.graphNote}>
+          <p style={themedStyles.graphNote}>
             Post common transactions like Accounts Receivable, Accounts Payable, and Purchases.
           </p>
-          <div style={styles.quickEntryGrid}>
+          <div style={themedStyles.quickEntryGrid}>
             <select
               value={quickEntryId}
               onChange={(event) => setQuickEntryId(event.target.value)}
-              style={styles.tableInput}
+              style={themedStyles.tableInput}
             >
               {QUICK_ENTRY_TEMPLATES.map((template) => (
                 <option key={template.id} value={template.id}>{template.label}</option>
@@ -969,47 +1211,47 @@ export default function App() {
               min="0"
               value={quickAmount}
               onChange={(event) => setQuickAmount(event.target.value)}
-              style={styles.tableInput}
+              style={themedStyles.tableInput}
               placeholder="Amount"
             />
-            <button onClick={applyQuickEntry} style={styles.button}>Post Entry</button>
+            <button onClick={applyQuickEntry} style={themedStyles.button}>Post Entry</button>
           </div>
         </div>
 
-        <div style={styles.card}>
-          <div style={styles.statementHeader}>
+        <div style={themedStyles.card}>
+          <div style={themedStyles.statementHeader}>
             <h3>Financial Input Sheet</h3>
-            <button onClick={addLedgerRow} style={styles.button}>Add Row</button>
+            <button onClick={addLedgerRow} style={themedStyles.button}>Add Row</button>
           </div>
-          <div style={styles.tableWrap}>
-            <table style={styles.table}>
+          <div style={themedStyles.tableWrap}>
+            <table style={themedStyles.table}>
               <thead>
                 <tr>
-                  <th style={styles.th}>Account</th>
-                  <th style={styles.th}>Type</th>
-                  <th style={styles.th}>Class</th>
-                  <th style={styles.th}>Amount</th>
-                  <th style={styles.th}>Depreciation</th>
-                  <th style={styles.th}>Action</th>
+                  <th style={themedStyles.th}>Account</th>
+                  <th style={themedStyles.th}>Type</th>
+                  <th style={themedStyles.th}>Class</th>
+                  <th style={themedStyles.th}>Amount</th>
+                  <th style={themedStyles.th}>Depreciation</th>
+                  <th style={themedStyles.th}>Action</th>
                 </tr>
               </thead>
               <tbody>
                 {ledgerRows.map((row) => (
                   <tr key={row.id}>
-                    <td style={styles.td}>
+                    <td style={themedStyles.td}>
                       <input
                         value={row.account}
                         onChange={(event) => updateLedgerRow(row.id, "account", event.target.value)}
-                        style={styles.tableInput}
+                        style={themedStyles.tableInput}
                         placeholder="Account name"
                         list="account-options"
                       />
                     </td>
-                    <td style={styles.td}>
+                    <td style={themedStyles.td}>
                       <select
                         value={row.type}
                         onChange={(event) => updateLedgerRow(row.id, "type", event.target.value)}
-                        style={styles.tableInput}
+                        style={themedStyles.tableInput}
                       >
                         <option value="revenue">Revenue</option>
                         <option value="expense">Expense</option>
@@ -1019,28 +1261,28 @@ export default function App() {
                         <option value="drawings">Drawings</option>
                       </select>
                     </td>
-                    <td style={styles.td}>
+                    <td style={themedStyles.td}>
                       <select
                         value={row.subtype}
                         onChange={(event) => updateLedgerRow(row.id, "subtype", event.target.value)}
-                        style={styles.tableInput}
+                        style={themedStyles.tableInput}
                       >
                         {getSubtypeOptions(row.type).map((option) => (
                           <option key={option} value={option}>{option}</option>
                         ))}
                       </select>
                     </td>
-                    <td style={styles.td}>
+                    <td style={themedStyles.td}>
                       <input
                         type="number"
                         step="0.01"
                         value={row.amount}
                         onChange={(event) => updateLedgerRow(row.id, "amount", event.target.value)}
-                        style={styles.tableInput}
+                        style={themedStyles.tableInput}
                         placeholder="0.00"
                       />
                     </td>
-                    <td style={styles.td}>
+                    <td style={themedStyles.td}>
                       {row.type === "asset" && row.subtype === "non-current" ? (
                         <input
                           type="number"
@@ -1048,15 +1290,15 @@ export default function App() {
                           min="0"
                           value={row.depreciation || ""}
                           onChange={(event) => updateLedgerRow(row.id, "depreciation", event.target.value)}
-                          style={styles.tableInput}
+                          style={themedStyles.tableInput}
                           placeholder="0.00"
                         />
                       ) : (
-                        <span style={styles.updateIndicator}>N/A</span>
+                        <span style={themedStyles.updateIndicator}>N/A</span>
                       )}
                     </td>
-                    <td style={styles.td}>
-                      <button onClick={() => deleteLedgerRow(row.id)} style={styles.deleteButton}>Remove</button>
+                    <td style={themedStyles.td}>
+                      <button onClick={() => deleteLedgerRow(row.id)} style={themedStyles.deleteButton}>Remove</button>
                     </td>
                   </tr>
                 ))}
@@ -1070,24 +1312,24 @@ export default function App() {
           </div>
         </div>
 
-        <div style={styles.card}>
+        <div style={themedStyles.card}>
           <h3>Profit and Loss Statement</h3>
-          <p style={styles.sectionLine}>Income</p>
+          <p style={themedStyles.sectionLine}>Income</p>
           <p>Gross Sales: {formatMoney(statement.grossSales)}</p>
           <p>Less: Goods Return: {formatMoney(statement.goodsReturn)}</p>
           <p>Less: Discounts: {formatMoney(statement.discounts)}</p>
           <p>Less: Bad Debts: {formatMoney(statement.badDebts)}</p>
           <p>Less: Cost of Goods Sold (COGS): {formatMoney(statement.cogs)}</p>
-          <p style={styles.totalLine}>Income From Revenue: {formatMoney(statement.incomeFromRevenue)}</p>
+          <p style={themedStyles.totalLine}>Income From Revenue: {formatMoney(statement.incomeFromRevenue)}</p>
           <hr />
-          <p style={styles.sectionLine}>Other Income</p>
+          <p style={themedStyles.sectionLine}>Other Income</p>
           <p>Interest Received on Bank Accounts: {formatMoney(statement.interestReceived)}</p>
           <p>Rental Income from Properties: {formatMoney(statement.rentalIncome)}</p>
           <p>Income from Miscellaneous Sources: {formatMoney(statement.miscIncome)}</p>
-          <p style={styles.totalLine}>Income from Other Sources: {formatMoney(statement.incomeFromOtherSources)}</p>
-          <p style={styles.totalLine}>Gross Income: {formatMoney(statement.grossIncome)}</p>
+          <p style={themedStyles.totalLine}>Income from Other Sources: {formatMoney(statement.incomeFromOtherSources)}</p>
+          <p style={themedStyles.totalLine}>Gross Income: {formatMoney(statement.grossIncome)}</p>
           <hr />
-          <p style={styles.sectionLine}>Expenses</p>
+          <p style={themedStyles.sectionLine}>Expenses</p>
           <p>Payroll Expenses: {formatMoney(statement.payrollExpenses)}</p>
           <p>Advertising Expenses: {formatMoney(statement.advertisingExpenses)}</p>
           <p>Marketing Expenses: {formatMoney(statement.marketingExpenses)}</p>
@@ -1097,126 +1339,126 @@ export default function App() {
           <p>Interest Paid on Loans: {formatMoney(statement.interestPaidOnLoans)}</p>
           <p>Insurance Premiums: {formatMoney(statement.insurancePremiums)}</p>
           <p>Other Miscellaneous Expenses: {formatMoney(statement.otherMiscExpenses)}</p>
-          <p style={styles.totalLine}>Total Expenses: {formatMoney(statement.totalExpensesDetailed)}</p>
+          <p style={themedStyles.totalLine}>Total Expenses: {formatMoney(statement.totalExpensesDetailed)}</p>
           <hr />
-          <p style={styles.totalLine}>Profit Before Taxes: {formatMoney(statement.profitBeforeTax)}</p>
+          <p style={themedStyles.totalLine}>Profit Before Taxes: {formatMoney(statement.profitBeforeTax)}</p>
           <p>Less Income Tax: {formatMoney(statement.incomeTaxExpense)}</p>
-          <p style={styles.totalLine}>Net Profit / Loss After Tax: {formatMoney(statement.netProfitAfterTax)}</p>
+          <p style={themedStyles.totalLine}>Net Profit / Loss After Tax: {formatMoney(statement.netProfitAfterTax)}</p>
         </div>
 
-        <div style={styles.card}>
+        <div style={themedStyles.card}>
           <h3>Balance Sheet</h3>
-          <p style={styles.sectionLine}>Assets</p>
+          <p style={themedStyles.sectionLine}>Assets</p>
           <p>Current Assets: {formatMoney(statement.assetsCurrent)}</p>
           <p>Non-Current Assets (Gross): {formatMoney(statement.assetsNonCurrentGross)}</p>
           <p>Less: Accumulated Depreciation: {formatMoney(statement.nonCurrentAccumulatedDepreciation)}</p>
           <p>Non-Current Assets (Net): {formatMoney(statement.assetsNonCurrent)}</p>
-          <p style={styles.totalLine}>Total Assets: {formatMoney(statement.totalAssets)}</p>
+          <p style={themedStyles.totalLine}>Total Assets: {formatMoney(statement.totalAssets)}</p>
           <hr />
-          <p style={styles.sectionLine}>Liabilities and Equity</p>
+          <p style={themedStyles.sectionLine}>Liabilities and Equity</p>
           <p>Current Liabilities: {formatMoney(statement.liabilitiesCurrent)}</p>
           <p>Non-Current Liabilities: {formatMoney(statement.liabilitiesNonCurrent)}</p>
           <p>Total Liabilities: {formatMoney(statement.totalLiabilities)}</p>
           <p>Equity (Capital + Profit - Drawings): {formatMoney(statement.equity)}</p>
-          <p style={styles.totalLine}>Total Liabilities + Equity: {formatMoney(statement.liabilitiesAndEquity)}</p>
+          <p style={themedStyles.totalLine}>Total Liabilities + Equity: {formatMoney(statement.liabilitiesAndEquity)}</p>
           <p style={Math.abs(statement.balanceDelta) < 0.01 ? styles.infoText : styles.errorText}>
             Balance Check (Assets - Liabilities & Equity): {formatMoney(statement.balanceDelta)}
           </p>
         </div>
 
-        <div style={styles.card}>
+        <div style={themedStyles.card}>
           <h3>Statement of Cash Flows (Operating Activities)</h3>
           <p>I. Net profit before taxation: {formatMoney(statement.profitBeforeTax)}</p>
-          <p style={styles.sectionLine}>II. Adjustments related to non-cash and non-operating items</p>
+          <p style={themedStyles.sectionLine}>II. Adjustments related to non-cash and non-operating items</p>
           <p>Add: Depreciation on Fixed Assets: {formatMoney(statement.depreciation)}</p>
           <p>Add: Interest on Borrowings: {formatMoney(statement.interestOnBorrowings)}</p>
           <p>Add: Loss on Sale of Asset: {formatMoney(statement.lossOnSale)}</p>
           <p>Less: Interest Income / Other Income: {formatMoney(statement.interestIncome)}</p>
           <p>Less: Dividend Income: {formatMoney(statement.dividendIncome)}</p>
           <p>Less: Profit on Sale of Asset: {formatMoney(statement.profitOnSale)}</p>
-          <p style={styles.totalLine}>
+          <p style={themedStyles.totalLine}>
             Operating Profit before Working Capital Changes: {formatMoney(statement.operatingProfitBeforeWorkingCapital)}
           </p>
           <hr />
-          <p style={styles.sectionLine}>III. Adjustments related to current assets and current liabilities</p>
+          <p style={themedStyles.sectionLine}>III. Adjustments related to current assets and current liabilities</p>
           <p>Add: Decrease in Current Assets: {formatMoney(statement.decreaseCurrentAssets)}</p>
           <p>Add: Increase in Current Liabilities: {formatMoney(statement.increaseCurrentLiabilities)}</p>
           <p>Less: Increase in Current Assets: {formatMoney(statement.increaseCurrentAssets)}</p>
           <p>Less: Decrease in Current Liabilities: {formatMoney(statement.decreaseCurrentLiabilities)}</p>
-          <p style={styles.totalLine}>Working Capital Adjustment: {formatMoney(statement.workingCapitalAdjustments)}</p>
-          <p style={styles.totalLine}>Cash generated from Operations: {formatMoney(statement.cashGeneratedFromOperations)}</p>
+          <p style={themedStyles.totalLine}>Working Capital Adjustment: {formatMoney(statement.workingCapitalAdjustments)}</p>
+          <p style={themedStyles.totalLine}>Cash generated from Operations: {formatMoney(statement.cashGeneratedFromOperations)}</p>
           <p>Less: Income taxes paid (net of refund): {formatMoney(statement.incomeTaxesPaid)}</p>
-          <p style={styles.totalLine}>Net Cash Inflow / (Outflow) from Operating Activities: {formatMoney(statement.netCashFromOperations)}</p>
+          <p style={themedStyles.totalLine}>Net Cash Inflow / (Outflow) from Operating Activities: {formatMoney(statement.netCashFromOperations)}</p>
         </div>
 
-        <div style={styles.card}>
+        <div style={themedStyles.card}>
           <h3>Financial Statement Graph</h3>
-          <p style={styles.graphNote}>
+          <p style={themedStyles.graphNote}>
             Bar/Column comparison of actual results against budget by statement category.
           </p>
-          <div style={styles.budgetGrid}>
-            <label style={styles.budgetField}>
+          <div style={themedStyles.budgetGrid}>
+            <label style={themedStyles.budgetField}>
               Revenue Budget
               <input
                 type="number"
                 step="0.01"
                 value={budgetTargets.revenue}
                 onChange={(event) => updateBudgetTarget("revenue", event.target.value)}
-                style={styles.tableInput}
+                style={themedStyles.tableInput}
               />
             </label>
-            <label style={styles.budgetField}>
+            <label style={themedStyles.budgetField}>
               Expense Budget
               <input
                 type="number"
                 step="0.01"
                 value={budgetTargets.expense}
                 onChange={(event) => updateBudgetTarget("expense", event.target.value)}
-                style={styles.tableInput}
+                style={themedStyles.tableInput}
               />
             </label>
-            <label style={styles.budgetField}>
+            <label style={themedStyles.budgetField}>
               Asset Budget
               <input
                 type="number"
                 step="0.01"
                 value={budgetTargets.totalAssets}
                 onChange={(event) => updateBudgetTarget("totalAssets", event.target.value)}
-                style={styles.tableInput}
+                style={themedStyles.tableInput}
               />
             </label>
-            <label style={styles.budgetField}>
+            <label style={themedStyles.budgetField}>
               Liability Budget
               <input
                 type="number"
                 step="0.01"
                 value={budgetTargets.totalLiabilities}
                 onChange={(event) => updateBudgetTarget("totalLiabilities", event.target.value)}
-                style={styles.tableInput}
+                style={themedStyles.tableInput}
               />
             </label>
-            <label style={styles.budgetField}>
+            <label style={themedStyles.budgetField}>
               Equity Budget
               <input
                 type="number"
                 step="0.01"
                 value={budgetTargets.equity}
                 onChange={(event) => updateBudgetTarget("equity", event.target.value)}
-                style={styles.tableInput}
+                style={themedStyles.tableInput}
               />
             </label>
-            <label style={styles.budgetField}>
+            <label style={themedStyles.budgetField}>
               Net Cash Budget
               <input
                 type="number"
                 step="0.01"
                 value={budgetTargets.netCashFlow}
                 onChange={(event) => updateBudgetTarget("netCashFlow", event.target.value)}
-                style={styles.tableInput}
+                style={themedStyles.tableInput}
               />
             </label>
           </div>
-          <div style={styles.chartWrap}>
+          <div style={themedStyles.chartWrap}>
             <ResponsiveContainer width="100%" height={320}>
               <BarChart data={statementGraphData}>
                 <XAxis dataKey="name" />
@@ -1337,6 +1579,17 @@ const styles = {
     fontWeight: 600,
     fontSize: 14,
   },
+  themeToggle: {
+    width: "100%",
+    border: "1px solid #bfd7f1",
+    borderRadius: 6,
+    background: "transparent",
+    color: "#1b2c42",
+    fontWeight: 600,
+    padding: "8px 10px",
+    marginBottom: 12,
+    cursor: "pointer",
+  },
   layout: {
     display: "flex",
     minHeight: "100vh",
@@ -1344,14 +1597,15 @@ const styles = {
     background: "#f4f9ff",
   },
   sidebar: {
-    width: 240,
+    width: "clamp(220px, 22vw, 280px)",
     background: "#0b1f3a",
     color: "#ffffff",
     padding: 20,
   },
   main: {
     flex: 1,
-    padding: 32,
+    width: "100%",
+    padding: "clamp(16px, 3vw, 32px)",
     background: "#eaf4ff",
   },
   card: {
@@ -1432,10 +1686,25 @@ const styles = {
     color: "#9b2226",
     fontWeight: 600,
   },
+  warningText: {
+    margin: "0 0 10px 0",
+    color: "#9a3412",
+    background: "#fff7ed",
+    border: "1px solid #fdba74",
+    borderRadius: 8,
+    padding: "10px 12px",
+    fontWeight: 700,
+  },
   infoText: {
     margin: 0,
     color: "#1d4e89",
     fontWeight: 600,
+  },
+  actionRow: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 10,
+    marginTop: 8,
   },
   tableWrap: {
     overflowX: "auto",
@@ -1515,3 +1784,4 @@ const styles = {
     alignItems: "center",
   },
 };
+

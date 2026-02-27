@@ -1,3 +1,4 @@
+from pathlib import Path
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
@@ -106,6 +107,7 @@ with app.app_context():
 # ---------------- LIMITS ----------------
 
 FREE_USAGE_LIMIT = 5
+MAINTENANCE_DEFAULT_MESSAGE = "[System Under Maintainance]"
 
 # ---------------- HELPERS ----------------
 
@@ -138,6 +140,85 @@ def log(user_id, action):
 
 def hash_key(raw_key):
     return hashlib.sha256(raw_key.encode()).hexdigest()
+
+
+def maintenance_state():
+    enabled = (os.getenv("MAINTENANCE_MODE", "0").strip().lower() in {"1", "true", "yes", "on"})
+    message = (os.getenv("MAINTENANCE_MESSAGE", MAINTENANCE_DEFAULT_MESSAGE) or MAINTENANCE_DEFAULT_MESSAGE).strip()
+    return {"maintenance": enabled, "message": message}
+
+
+def default_subtype_for(ledger_type):
+    if ledger_type in {"asset", "liability"}:
+        return "current"
+    if ledger_type in {"revenue", "expense"}:
+        return "operating"
+    return "equity"
+
+
+def read_external_dataframe(uploaded_file):
+    filename = (uploaded_file.filename or "").lower()
+    suffix = Path(filename).suffix
+
+    if suffix in {".csv", ".txt"}:
+        return pd.read_csv(uploaded_file)
+    if suffix in {".xls", ".xlsx"}:
+        return pd.read_excel(uploaded_file)
+    if suffix == ".json":
+        return pd.read_json(uploaded_file)
+
+    raise ValueError("unsupported file type; use CSV, XLS, XLSX, TXT, or JSON")
+
+
+def normalize_ledger_dataframe(df):
+    rename_map = {}
+    for column in df.columns:
+        key = str(column).strip().lower()
+        if key in {"account", "name"}:
+            rename_map[column] = "account"
+        elif key == "type":
+            rename_map[column] = "type"
+        elif key in {"subtype", "class", "category"}:
+            rename_map[column] = "subtype"
+        elif key in {"amount", "value"}:
+            rename_map[column] = "amount"
+        elif key in {"depreciation", "depreciation_amount"}:
+            rename_map[column] = "depreciation"
+
+    normalized = df.rename(columns=rename_map).copy()
+    required = {"type", "amount"}
+    missing = required.difference(normalized.columns)
+    if missing:
+        raise ValueError(f"missing required columns: {', '.join(sorted(missing))}")
+
+    normalized["type"] = normalized["type"].astype(str).str.lower().str.strip()
+    normalized["amount"] = pd.to_numeric(normalized["amount"], errors="coerce")
+    if normalized["amount"].isna().any():
+        raise ValueError("amount column must contain numeric values")
+
+    if "account" not in normalized.columns:
+        normalized["account"] = normalized["type"].str.title()
+    else:
+        normalized["account"] = normalized["account"].astype(str).str.strip().replace("", pd.NA)
+        normalized["account"] = normalized["account"].fillna(normalized["type"].str.title())
+
+    if "subtype" not in normalized.columns:
+        normalized["subtype"] = normalized["type"].map(default_subtype_for)
+    else:
+        normalized["subtype"] = normalized["subtype"].astype(str).str.lower().str.strip()
+        blank_subtype = normalized["subtype"].eq("")
+        normalized.loc[blank_subtype, "subtype"] = normalized.loc[blank_subtype, "type"].map(default_subtype_for)
+
+    if "depreciation" not in normalized.columns:
+        normalized["depreciation"] = 0.0
+    else:
+        normalized["depreciation"] = pd.to_numeric(normalized["depreciation"], errors="coerce")
+        if normalized["depreciation"].isna().any():
+            raise ValueError("depreciation column must contain numeric values")
+        if (normalized["depreciation"] < 0).any():
+            raise ValueError("depreciation cannot be negative")
+
+    return normalized[["account", "type", "subtype", "amount", "depreciation"]]
 
 
 def verify_google_credential(credential):
@@ -368,6 +449,10 @@ def invite():
 @app.route("/analyze", methods=["POST"])
 @jwt_required()
 def analyze():
+    status = maintenance_state()
+    if status["maintenance"]:
+        return error_response(status["message"], 503)
+
     user = get_user_from_token()
     if not user:
         return error_response("invalid token", 401)
@@ -396,6 +481,45 @@ def analyze():
 
     log(user.id, "generated report")
     return result
+
+
+@app.route("/extract-ledger", methods=["POST"])
+@jwt_required()
+def extract_ledger():
+    status = maintenance_state()
+    if status["maintenance"]:
+        return error_response(status["message"], 503)
+
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    uploaded_file = request.files.get("file")
+    if not uploaded_file:
+        return error_response("file is required")
+
+    try:
+        raw_df = read_external_dataframe(uploaded_file)
+        normalized_df = normalize_ledger_dataframe(raw_df)
+        summary = calc(normalized_df)
+    except Exception as exc:
+        return error_response(f"invalid file: {exc}")
+
+    ledger_rows = []
+    for idx, row in enumerate(normalized_df.to_dict(orient="records"), start=1):
+        ledger_rows.append(
+            {
+                "id": idx,
+                "account": str(row.get("account", "")).strip(),
+                "type": str(row.get("type", "")).strip(),
+                "subtype": str(row.get("subtype", "")).strip(),
+                "amount": float(row.get("amount", 0) or 0),
+                "depreciation": float(row.get("depreciation", 0) or 0),
+            }
+        )
+
+    log(user.id, "extracted external ledger file")
+    return {"ledger_rows": ledger_rows, "summary": summary}
 
 
 # ---------------- API KEY ----------------
@@ -489,9 +613,14 @@ def health():
         return {"status": "degraded", "env": ENV, "database": "error"}, 503
 
 
+@app.route("/system-status")
+def system_status():
+    return maintenance_state()
+
+
 # ---------------- RUN ----------------
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))
+    port = int(os.getenv("PORT", "5000"))
     debug = ENV == "development"
     app.run(host="0.0.0.0", port=port, debug=debug)
