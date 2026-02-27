@@ -3,6 +3,7 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from flask_bcrypt import Bcrypt
 from flask_cors import CORS
+from sqlalchemy.exc import OperationalError
 import hashlib
 import datetime
 import json
@@ -78,7 +79,14 @@ class AuditLog(db.Model):
 
 
 with app.app_context():
-    db.create_all()
+    # Avoid multi-worker startup races in production. In production, schema
+    # should be managed explicitly (migrations/init job), not at app import time.
+    if ENV != "production":
+        try:
+            db.create_all()
+        except OperationalError as exc:
+            if "already exists" not in str(exc).lower():
+                raise
 
 # ---------------- LIMITS ----------------
 
