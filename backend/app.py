@@ -6,6 +6,7 @@ import bcrypt
 import jwt
 import psycopg2
 import redis
+import stripe
 from flask import Flask, request
 from flask_cors import CORS
 from flask_limiter import Limiter
@@ -28,6 +29,9 @@ DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORT = os.getenv("DB_PORT", "5432")
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+
+stripe.api_key = STRIPE_SECRET_KEY
 
 con = psycopg2.connect(
     database=DB_NAME,
@@ -221,6 +225,24 @@ def pay():
     log_action(request.user["user_id"], "payment recorded")
 
     return {"msg": "payment saved"}
+
+
+@app.route("/create-payment", methods=["POST"])
+@token_required
+def create_payment():
+    if not STRIPE_SECRET_KEY:
+        return {"error": "Stripe key is not configured"}, 500
+
+    d = request.json or {}
+    amount = int(d.get("amount", 5000))
+    currency = d.get("currency", "usd")
+
+    intent = stripe.PaymentIntent.create(
+        amount=amount,
+        currency=currency,
+        payment_method_types=["card"],
+    )
+    return {"clientSecret": intent.client_secret}
 
 
 if __name__ == "__main__":
