@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: kisehotel-api
+    env: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install --upgrade --force-reinstall --no-cache-dir -r requirements.txt
+    startCommand: gunicorn -w 2 -b 0.0.0.0:$PORT app:app
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: DB_NAME
+        value: kisehotel
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        value: "5432"
+      - key: REDIS_HOST
+        sync: false
+      - key: REDIS_PORT
+        value: "6379"
