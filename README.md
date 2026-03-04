@@ -61,6 +61,32 @@ npm run dev
 
 Frontend default API base is `/api` (proxied to backend in dev).
 
+### Open on Phone (Same Wi-Fi)
+
+1. Start the app from project root:
+
+```bash
+npm run dev
+```
+
+2. Find your computer's local IP:
+
+```bash
+ipconfig
+```
+
+Use the IPv4 address from your active Wi-Fi adapter (for example `192.168.1.20`).
+
+3. On your phone browser, open:
+
+```text
+http://<YOUR_COMPUTER_IP>:5173
+```
+
+Example: `http://192.168.1.20:5173`
+
+4. If it does not load, allow port `5173` through Windows Firewall for private networks.
+
 ## API Endpoints
 
 - `POST /register`
@@ -97,6 +123,24 @@ Frontend (`frontend/.env`):
 ## Deployment
 
 Use [DEPLOYMENT.md](DEPLOYMENT.md) for the complete Supabase + Render + Vercel steps.
+
+## Desktop Accounting System
+
+This repo now also includes a standalone desktop app in `accounting_system/` with:
+
+- Login
+- Inventory management
+- Sales + invoice generator
+- Financial reports (total sales, inventory value, income statement, balance sheet, trial balance)
+- Matplotlib dashboard chart
+- Double-entry journal posting
+
+Run it with:
+
+```bash
+pip install -r accounting_system/requirements.txt
+python -m accounting_system.login
+```
 
 ## Docker Compose
 

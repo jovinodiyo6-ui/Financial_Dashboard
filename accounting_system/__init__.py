@@ -1,0 +1,2 @@
+"""Mini accounting system package."""
+
