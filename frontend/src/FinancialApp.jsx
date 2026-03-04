@@ -226,6 +226,33 @@ export default function App() {
   const [quickEntryId, setQuickEntryId] = useState(QUICK_ENTRY_TEMPLATES[0].id);
   const isDarkMode = themeMode === "dark";
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const oauthToken = params.get("oauth_token");
+    const oauthEmail = params.get("oauth_email");
+    const oauthError = params.get("oauth_error");
+    const oauthCreated = params.get("oauth_created");
+    if (!oauthToken && !oauthError) {
+      return;
+    }
+
+    if (oauthToken) {
+      setToken(oauthToken);
+      persistToken(oauthToken);
+      if (oauthEmail) {
+        setEmail(oauthEmail);
+        persistEmail(oauthEmail);
+      }
+      setInfoMessage(oauthCreated === "1" ? "Google account created and signed in." : "Signed in with Google.");
+    } else if (oauthError) {
+      setErrorMessage(oauthError);
+    }
+
+    ["oauth_token", "oauth_email", "oauth_error", "oauth_created"].forEach((k) => params.delete(k));
+    const next = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ""}`;
+    window.history.replaceState({}, "", next);
+  }, []);
+
   const chartData = useMemo(() => {
     if (!stats) {
       return [];
@@ -568,6 +595,11 @@ export default function App() {
     setAdminUsers([]);
     setFile(null);
     setInfoMessage("Signed out.");
+  };
+
+  const loginWithGoogleRedirect = () => {
+    const redirectUri = encodeURIComponent(window.location.origin);
+    window.location.href = `${API_URL}/login/google?redirect_uri=${redirectUri}`;
   };
 
   const continueWithGoogle = async (credential) => {
@@ -987,6 +1019,12 @@ export default function App() {
       },
       eyeToggle: { ...styles.eyeToggle, color: "#cbd5e1" },
       authPrimaryButton: { ...styles.authPrimaryButton, background: "#2563eb" },
+      oauthRedirectButton: {
+        ...styles.oauthRedirectButton,
+        background: "#0f172a",
+        color: "#e2e8f0",
+        border: "1px solid #334155",
+      },
       authSwitchText: { ...styles.authSwitchText, color: "#cbd5e1" },
       authDivider: { ...styles.authDivider, color: "#94a3b8" },
       inlineLink: { ...styles.inlineLink, color: "#93c5fd" },
@@ -1132,6 +1170,9 @@ export default function App() {
                 <>
                   <div style={themedStyles.authDivider}><span>or</span></div>
                   <div ref={googleButtonRef} style={themedStyles.googleButtonWrap} />
+                  <button type="button" onClick={loginWithGoogleRedirect} style={themedStyles.oauthRedirectButton}>
+                    Sign in with Google (Redirect)
+                  </button>
                 </>
               ) : null}
               <p style={themedStyles.authSwitchText}>
@@ -1202,6 +1243,9 @@ export default function App() {
                 <>
                   <div style={themedStyles.authDivider}><span>or</span></div>
                   <div ref={googleButtonRef} style={themedStyles.googleButtonWrap} />
+                  <button type="button" onClick={loginWithGoogleRedirect} style={themedStyles.oauthRedirectButton}>
+                    Continue with Google (Redirect)
+                  </button>
                 </>
               ) : null}
               <p style={themedStyles.authSwitchText}>
@@ -1766,6 +1810,17 @@ const styles = {
     padding: "11px 14px",
     cursor: "pointer",
     marginTop: 4,
+  },
+  oauthRedirectButton: {
+    width: "100%",
+    border: "1px solid #d6dce5",
+    borderRadius: 6,
+    background: "#ffffff",
+    color: "#1b2c42",
+    fontWeight: 600,
+    padding: "10px 12px",
+    cursor: "pointer",
+    marginTop: 8,
   },
   authSwitchText: {
     margin: "12px 0 2px 0",

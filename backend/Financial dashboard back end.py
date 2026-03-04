@@ -1,11 +1,12 @@
 from pathlib import Path
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, redirect, url_for, session
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from flask_bcrypt import Bcrypt
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from authlib.integrations.flask_client import OAuth
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from functools import wraps
@@ -50,6 +51,7 @@ if ENV == "production" and DATABASE_URL.startswith("sqlite"):
 
 app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
 app.config["JWT_SECRET_KEY"] = JWT_SECRET or "dev-only-secret-change-me"
+app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", JWT_SECRET or "dev-flask-secret-change-me")
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = datetime.timedelta(hours=8)
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024  # 5 MB upload cap
@@ -73,6 +75,19 @@ limiter = Limiter(
     storage_uri=os.getenv("RATE_LIMIT_STORAGE_URI", "memory://"),
 )
 limiter.init_app(app)
+oauth = OAuth(app)
+
+GOOGLE_CLIENT_ID = (os.getenv("GOOGLE_CLIENT_ID") or "").strip()
+GOOGLE_CLIENT_SECRET = (os.getenv("GOOGLE_CLIENT_SECRET") or "").strip()
+google = None
+if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET:
+    google = oauth.register(
+        name="google",
+        client_id=GOOGLE_CLIENT_ID,
+        client_secret=GOOGLE_CLIENT_SECRET,
+        server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+        client_kwargs={"scope": "openid email profile"},
+    )
 
 # ---------------- DATABASE ----------------
 
@@ -253,6 +268,30 @@ def aggregate_org_reports(org_id):
         "profit": round(revenue_total - expense_total, 2),
         "total_assets": round(assets_total, 2),
     }
+
+
+def resolve_frontend_redirect(candidate):
+    default_url = (os.getenv("FRONTEND_URL") or "http://localhost:5173").strip()
+    allowed_raw = (os.getenv("GOOGLE_ALLOWED_REDIRECT_ORIGINS") or "").strip()
+    allowed_origins = {default_url.rstrip("/")}
+    if allowed_raw:
+        allowed_origins.update(origin.strip().rstrip("/") for origin in allowed_raw.split(",") if origin.strip())
+
+    if candidate:
+        parsed = urllib.parse.urlparse(candidate)
+        candidate_origin = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+        if parsed.scheme in {"http", "https"} and candidate_origin in allowed_origins:
+            return candidate
+
+    return default_url
+
+
+def append_query(url, params):
+    parsed = urllib.parse.urlparse(url)
+    existing = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
+    existing.update(params)
+    query = urllib.parse.urlencode(existing)
+    return urllib.parse.urlunparse(parsed._replace(query=query))
 
 
 def maintenance_state():
@@ -531,6 +570,71 @@ def auth_google():
     log(user.id, "logged in with google")
     token = create_access_token(identity=str(user.id))
     return {"token": token, "email": user.email, "created": created}
+
+
+@app.route("/login/google")
+@limiter.limit("20 per minute")
+def login_google():
+    if not google:
+        return error_response("google oauth is not configured on server", 503)
+
+    frontend_redirect = resolve_frontend_redirect((request.args.get("redirect_uri") or "").strip())
+    session["google_frontend_redirect"] = frontend_redirect
+    callback_uri = url_for("google_callback", _external=True)
+    return google.authorize_redirect(callback_uri)
+
+
+@app.route("/auth/google/callback")
+@limiter.limit("20 per minute")
+def google_callback():
+    frontend_redirect = resolve_frontend_redirect(session.pop("google_frontend_redirect", ""))
+    if not google:
+        return redirect(append_query(frontend_redirect, {"oauth_error": "google oauth not configured"}))
+
+    try:
+        token = google.authorize_access_token()
+        user_info = token.get("userinfo")
+        if not user_info:
+            user_info = google.get("userinfo").json()
+    except Exception:
+        return redirect(append_query(frontend_redirect, {"oauth_error": "google login failed"}))
+
+    email = (user_info.get("email") or "").strip().lower()
+    if not email:
+        return redirect(append_query(frontend_redirect, {"oauth_error": "google email missing"}))
+
+    user = User.query.filter_by(email=email).first()
+    created = False
+    if not user:
+        derived_org = ((email.split("@")[0] if "@" in email else email) or "My Business")[:100]
+        random_password = os.urandom(24).hex()
+        hashed_password = bcrypt.generate_password_hash(random_password).decode()
+        try:
+            org = Organization(name=derived_org)
+            db.session.add(org)
+            db.session.flush()
+            user = User(email=email, password=hashed_password, role="owner", org_id=org.id)
+            db.session.add(user)
+            if not safe_commit():
+                return redirect(append_query(frontend_redirect, {"oauth_error": "database error"}))
+            created = True
+        except SQLAlchemyError:
+            db.session.rollback()
+            return redirect(append_query(frontend_redirect, {"oauth_error": "database error"}))
+
+    touch_session(user.id)
+    log(user.id, "logged in with google oauth redirect")
+    jwt_token = create_access_token(identity=str(user.id))
+    return redirect(
+        append_query(
+            frontend_redirect,
+            {
+                "oauth_token": jwt_token,
+                "oauth_email": user.email,
+                "oauth_created": "1" if created else "0",
+            },
+        )
+    )
 
 
 # ---------------- INVITE USER ----------------
