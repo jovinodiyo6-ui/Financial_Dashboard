@@ -1166,15 +1166,11 @@ export default function App() {
               <button onClick={login} style={themedStyles.authPrimaryButton} disabled={authLoading}>
                 {authLoading ? "Signing in..." : "Login"}
               </button>
-              {GOOGLE_CLIENT_ID ? (
-                <>
-                  <div style={themedStyles.authDivider}><span>or</span></div>
-                  <div ref={googleButtonRef} style={themedStyles.googleButtonWrap} />
-                  <button type="button" onClick={loginWithGoogleRedirect} style={themedStyles.oauthRedirectButton}>
-                    Sign in with Google (Redirect)
-                  </button>
-                </>
-              ) : null}
+              <div style={themedStyles.authDivider}><span>or</span></div>
+              {GOOGLE_CLIENT_ID ? <div ref={googleButtonRef} style={themedStyles.googleButtonWrap} /> : null}
+              <button type="button" onClick={loginWithGoogleRedirect} style={themedStyles.oauthRedirectButton}>
+                Sign in with Google (Redirect)
+              </button>
               <p style={themedStyles.authSwitchText}>
                 Don't have an account?{" "}
                 <button
@@ -1239,15 +1235,11 @@ export default function App() {
               <button onClick={register} style={themedStyles.authPrimaryButton} disabled={authLoading}>
                 {authLoading ? "Creating..." : "Signup"}
               </button>
-              {GOOGLE_CLIENT_ID ? (
-                <>
-                  <div style={themedStyles.authDivider}><span>or</span></div>
-                  <div ref={googleButtonRef} style={themedStyles.googleButtonWrap} />
-                  <button type="button" onClick={loginWithGoogleRedirect} style={themedStyles.oauthRedirectButton}>
-                    Continue with Google (Redirect)
-                  </button>
-                </>
-              ) : null}
+              <div style={themedStyles.authDivider}><span>or</span></div>
+              {GOOGLE_CLIENT_ID ? <div ref={googleButtonRef} style={themedStyles.googleButtonWrap} /> : null}
+              <button type="button" onClick={loginWithGoogleRedirect} style={themedStyles.oauthRedirectButton}>
+                Continue with Google (Redirect)
+              </button>
               <p style={themedStyles.authSwitchText}>
                 Already have an account?{" "}
                 <button
