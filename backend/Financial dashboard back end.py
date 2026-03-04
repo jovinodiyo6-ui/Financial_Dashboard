@@ -99,6 +99,16 @@ class AuditLog(db.Model):
     )
 
 
+class ActiveSession(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, unique=True, nullable=False)
+    last_seen = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
 with app.app_context():
     # Avoid multi-worker startup races in production. In production, schema
     # should be managed explicitly (migrations/init job), not at app import time.
@@ -145,6 +155,31 @@ def log(user_id, action):
 
 def hash_key(raw_key):
     return hashlib.sha256(raw_key.encode()).hexdigest()
+
+
+def touch_session(user_id):
+    now = datetime.datetime.now(datetime.UTC)
+    session = ActiveSession.query.filter_by(user_id=user_id).first()
+    if session:
+        session.last_seen = now
+    else:
+        db.session.add(ActiveSession(user_id=user_id, last_seen=now))
+    safe_commit()
+
+
+def clear_session(user_id):
+    ActiveSession.query.filter_by(user_id=user_id).delete()
+    safe_commit()
+
+
+def active_user_count_for_org(org_id, online_window_minutes=5):
+    cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=online_window_minutes)
+    return (
+        db.session.query(ActiveSession.id)
+        .join(User, ActiveSession.user_id == User.id)
+        .filter(User.org_id == org_id, ActiveSession.last_seen >= cutoff)
+        .count()
+    )
 
 
 def maintenance_state():
@@ -375,6 +410,8 @@ def login():
     if not user or not bcrypt.check_password_hash(user.password, password):
         return error_response("bad login", 401)
 
+    touch_session(user.id)
+    log(user.id, "logged in")
     return {"token": create_access_token(identity=str(user.id))}
 
 
@@ -414,6 +451,8 @@ def auth_google():
             db.session.rollback()
             return error_response("database error during google auth", 503)
 
+    touch_session(user.id)
+    log(user.id, "logged in with google")
     token = create_access_token(identity=str(user.id))
     return {"token": token, "email": user.email, "created": created}
 
@@ -579,8 +618,66 @@ def user_count():
     if not org:
         return error_response("organization not found", 404)
 
-    count = User.query.filter_by(org_id=org.id).count()
-    return {"user_count": count}
+    count = active_user_count_for_org(org.id)
+    registered = User.query.filter_by(org_id=org.id).count()
+    return {"user_count": count, "active_users": count, "registered_users": registered}
+
+
+@app.route("/session/ping", methods=["POST"])
+@jwt_required()
+def session_ping():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    touch_session(user.id)
+    return {"ok": True}
+
+
+@app.route("/logout", methods=["POST"])
+@jwt_required()
+def logout():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    clear_session(user.id)
+    log(user.id, "logged out")
+    return {"ok": True}
+
+
+@app.route("/activity/recent")
+@jwt_required()
+def recent_activity():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    try:
+        limit = int(request.args.get("limit", "8"))
+    except ValueError:
+        limit = 8
+    limit = max(1, min(limit, 50))
+
+    rows = (
+        db.session.query(AuditLog, User.email)
+        .join(User, AuditLog.user_id == User.id)
+        .filter(User.org_id == user.org_id)
+        .order_by(AuditLog.time.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return {
+        "items": [
+            {
+                "email": email,
+                "action": log_row.action,
+                "time": log_row.time.isoformat() if log_row.time else None,
+            }
+            for log_row, email in rows
+        ]
+    }
 
 
 # ---------------- ADMIN USERS ----------------

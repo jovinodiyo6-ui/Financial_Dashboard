@@ -206,6 +206,7 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(false);
   const [userCount, setUserCount] = useState(0);
   const [userCountUpdating, setUserCountUpdating] = useState(false);
+  const [recentActivity, setRecentActivity] = useState([]);
   const [maintenance, setMaintenance] = useState({
     maintenance: false,
     message: "[System Under Maintainance]",
@@ -544,7 +545,14 @@ export default function App() {
     }
   };
 
-  const logout = () => {
+  const logout = async () => {
+    try {
+      if (token) {
+        await authorizedFetch("/logout", { method: "POST" });
+      }
+    } catch {
+      // Ignore logout API failures and clear client session anyway.
+    }
     setToken(null);
     persistToken(null);
     setStats(null);
@@ -621,6 +629,25 @@ export default function App() {
       }
     } finally {
       setUserCountUpdating(false);
+    }
+  };
+
+  const loadRecentActivity = async () => {
+    try {
+      const data = await authorizedFetch("/activity/recent?limit=8");
+      if (Array.isArray(data.items)) {
+        setRecentActivity(data.items);
+      }
+    } catch {
+      setRecentActivity([]);
+    }
+  };
+
+  const pingSession = async () => {
+    try {
+      await authorizedFetch("/session/ping", { method: "POST" });
+    } catch {
+      // Keep backward compatibility if backend route is not available yet.
     }
   };
 
@@ -902,6 +929,8 @@ export default function App() {
       totalLine: { ...styles.totalLine, color: "#e2e8f0" },
       sectionLine: { ...styles.sectionLine, color: "#93c5fd" },
       budgetField: { ...styles.budgetField, color: "#bfdbfe" },
+      activityItem: { ...styles.activityItem, borderBottom: "1px solid #334155" },
+      activityTime: { ...styles.activityTime, color: "#93c5fd" },
     };
   }, [isDarkMode]);
 
@@ -914,7 +943,8 @@ export default function App() {
 
     const bootstrap = async () => {
       try {
-        await Promise.all([loadStats(), loadLiveUserCount()]);
+        await loadStats();
+        await Promise.all([loadLiveUserCount(), loadRecentActivity(), pingSession()]);
       } catch (error) {
         if (active) {
           setErrorMessage(error.message || "Session error. Please sign in again.");
@@ -927,7 +957,7 @@ export default function App() {
 
     const interval = setInterval(async () => {
       try {
-        await loadLiveUserCount();
+        await Promise.all([loadLiveUserCount(), loadRecentActivity(), pingSession()]);
       } catch {
         // Silent polling failure to avoid noisy UI.
       }
@@ -1141,12 +1171,30 @@ export default function App() {
         {infoMessage ? <p style={themedStyles.infoText}>{infoMessage}</p> : null}
 
         <div style={themedStyles.liveUserCard}>
-          <h3>Live Active Users</h3>
+          <h3>Live Online Users</h3>
           <div style={themedStyles.userCountDisplay}>
             <span style={themedStyles.userCountNumber}>{userCount}</span>
             {userCountUpdating && <span style={themedStyles.pulse}>●</span>}
           </div>
-          <p style={themedStyles.updateIndicator}>Updates every 3 seconds</p>
+          <p style={themedStyles.updateIndicator}>Active in the last 5 minutes, refreshes every 3 seconds</p>
+        </div>
+
+        <div style={themedStyles.card}>
+          <h3>Recent Activity</h3>
+          {recentActivity.length ? (
+            <ul style={themedStyles.activityList}>
+              {recentActivity.map((item, idx) => (
+                <li key={`${item.time || "time"}-${idx}`} style={themedStyles.activityItem}>
+                  <strong>{item.email || "User"}</strong> {item.action}
+                  <span style={themedStyles.activityTime}>
+                    {item.time ? new Date(item.time).toLocaleString() : ""}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p style={themedStyles.updateIndicator}>No activity yet.</p>
+          )}
         </div>
 
         <div style={themedStyles.card}>
@@ -1782,6 +1830,25 @@ const styles = {
     gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
     gap: 10,
     alignItems: "center",
+  },
+  activityList: {
+    listStyle: "none",
+    padding: 0,
+    margin: 0,
+    display: "grid",
+    gap: 8,
+  },
+  activityItem: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 12,
+    borderBottom: "1px solid #dbeafe",
+    paddingBottom: 8,
+  },
+  activityTime: {
+    color: "#1d4e89",
+    fontSize: 12,
+    whiteSpace: "nowrap",
   },
 };
 

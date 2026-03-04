@@ -33,3 +33,13 @@ pip install -r accounting_system/requirements.txt
 ```bash
 python -m accounting_system.login
 ```
+
+## Build Windows EXE
+
+```powershell
+powershell -ExecutionPolicy Bypass -File accounting_system/build_exe.ps1
+```
+
+Output:
+
+- `dist/AccountingSystem.exe`
