@@ -4,8 +4,11 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from flask_bcrypt import Bcrypt
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
+from functools import wraps
 import hashlib
 import datetime
 import json
@@ -47,8 +50,12 @@ if ENV == "production" and DATABASE_URL.startswith("sqlite"):
 
 app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
 app.config["JWT_SECRET_KEY"] = JWT_SECRET or "dev-only-secret-change-me"
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = datetime.timedelta(hours=8)
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024  # 5 MB upload cap
+app.config["SESSION_COOKIE_SECURE"] = ENV == "production"
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
     "pool_pre_ping": True,
     "pool_recycle": 300,
@@ -60,6 +67,12 @@ app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
 bcrypt = Bcrypt(app)
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=[],
+    storage_uri=os.getenv("RATE_LIMIT_STORAGE_URI", "memory://"),
+)
+limiter.init_app(app)
 
 # ---------------- DATABASE ----------------
 
@@ -123,11 +136,29 @@ with app.app_context():
 
 FREE_USAGE_LIMIT = 5
 MAINTENANCE_DEFAULT_MESSAGE = "[System Under Maintainance]"
+VALID_ROLES = {"owner", "admin", "accountant", "manager", "cashier", "member"}
 
 # ---------------- HELPERS ----------------
 
 def error_response(message, status=400):
     return {"error": message}, status
+
+
+@app.after_request
+def add_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Cache-Control"] = "no-store"
+    if request.is_secure or request.headers.get("X-Forwarded-Proto", "").lower() == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+
+@app.errorhandler(429)
+def ratelimit_handler(_):
+    return error_response("too many requests, try again later", 429)
 
 
 def safe_commit():
@@ -145,6 +176,24 @@ def get_user_from_token():
     except (TypeError, ValueError):
         return None
     return db.session.get(User, user_id)
+
+
+def roles_required(*allowed_roles):
+    allowed = set(allowed_roles)
+
+    def decorator(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            user = get_user_from_token()
+            if not user:
+                return error_response("invalid token", 401)
+            if user.role not in allowed:
+                return error_response("not allowed", 403)
+            return fn(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
 
 
 def log(user_id, action):
@@ -180,6 +229,30 @@ def active_user_count_for_org(org_id, online_window_minutes=5):
         .filter(User.org_id == org_id, ActiveSession.last_seen >= cutoff)
         .count()
     )
+
+
+def aggregate_org_reports(org_id):
+    reports = Report.query.filter_by(org_id=org_id).all()
+    revenue_total = 0.0
+    expense_total = 0.0
+    assets_total = 0.0
+
+    for report in reports:
+        try:
+            payload = json.loads(report.data or "{}")
+        except (TypeError, ValueError):
+            payload = {}
+
+        revenue_total += float(payload.get("revenue", 0) or 0)
+        expense_total += float(payload.get("expenses", payload.get("expense", 0)) or 0)
+        assets_total += float(payload.get("total_assets", payload.get("totalAssets", 0)) or 0)
+
+    return {
+        "revenue": round(revenue_total, 2),
+        "expenses": round(expense_total, 2),
+        "profit": round(revenue_total - expense_total, 2),
+        "total_assets": round(assets_total, 2),
+    }
 
 
 def maintenance_state():
@@ -363,6 +436,7 @@ def calc(df):
 # ---------------- AUTH ----------------
 
 @app.route("/register", methods=["POST"])
+@limiter.limit("10 per minute")
 def register():
     data = request.get_json(silent=True) or {}
     org_name = (data.get("org") or "").strip()
@@ -397,6 +471,7 @@ def register():
 
 
 @app.route("/login", methods=["POST"])
+@limiter.limit("20 per minute")
 def login():
     data = request.get_json(silent=True) or {}
     email = (data.get("email") or "").strip().lower()
@@ -416,6 +491,7 @@ def login():
 
 
 @app.route("/auth/google", methods=["POST"])
+@limiter.limit("20 per minute")
 def auth_google():
     data = request.get_json(silent=True) or {}
     credential = (data.get("credential") or "").strip()
@@ -461,6 +537,7 @@ def auth_google():
 
 @app.route("/invite", methods=["POST"])
 @jwt_required()
+@limiter.limit("30 per minute")
 def invite():
     me = get_user_from_token()
     if not me:
@@ -479,7 +556,11 @@ def invite():
 
     hashed_password = bcrypt.generate_password_hash("temp123").decode()
 
-    user = User(email=invite_email, password=hashed_password, role="member", org_id=me.org_id)
+    role = (data.get("role") or "member").strip().lower()
+    if role not in VALID_ROLES:
+        return error_response("invalid role")
+
+    user = User(email=invite_email, password=hashed_password, role=role, org_id=me.org_id)
     db.session.add(user)
     if not safe_commit():
         return error_response("database error while inviting user", 503)
@@ -492,6 +573,7 @@ def invite():
 
 @app.route("/analyze", methods=["POST"])
 @jwt_required()
+@limiter.limit("30 per minute")
 def analyze():
     status = maintenance_state()
     if status["maintenance"]:
@@ -529,6 +611,7 @@ def analyze():
 
 @app.route("/extract-ledger", methods=["POST"])
 @jwt_required()
+@limiter.limit("30 per minute")
 def extract_ledger():
     status = maintenance_state()
     if status["maintenance"]:
@@ -587,6 +670,16 @@ def create_key():
 
 # ---------------- ANALYTICS ----------------
 
+@app.route("/me")
+@jwt_required()
+def me():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    return {"id": user.id, "email": user.email, "role": user.role, "org_id": user.org_id}
+
+
 @app.route("/analytics")
 @jwt_required()
 def analytics():
@@ -602,6 +695,63 @@ def analytics():
         "usage": org.usage,
         "reports": Report.query.filter_by(org_id=org.id).count(),
         "users": User.query.filter_by(org_id=org.id).count(),
+        "active_users": active_user_count_for_org(org.id),
+    }
+
+
+@app.route("/dashboard")
+@jwt_required()
+def dashboard_summary():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    org = db.session.get(Organization, user.org_id)
+    if not org:
+        return error_response("organization not found", 404)
+
+    report_totals = aggregate_org_reports(org.id)
+    return {
+        "sales": report_totals["revenue"],
+        "expenses": report_totals["expenses"],
+        "profit": report_totals["profit"],
+        "inventory_value": report_totals["total_assets"],
+        "active_users": active_user_count_for_org(org.id),
+    }
+
+
+@app.route("/reports/income")
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def income_statement():
+    user = get_user_from_token()
+    org = db.session.get(Organization, user.org_id)
+    if not org:
+        return error_response("organization not found", 404)
+
+    totals = aggregate_org_reports(org.id)
+    return {
+        "revenue": totals["revenue"],
+        "expenses": totals["expenses"],
+        "profit": totals["profit"],
+    }
+
+
+@app.route("/inventory")
+@jwt_required()
+def inventory_summary():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    org = db.session.get(Organization, user.org_id)
+    if not org:
+        return error_response("organization not found", 404)
+
+    totals = aggregate_org_reports(org.id)
+    return {
+        "inventory_value": totals["total_assets"],
+        "note": "Derived from uploaded report assets. Add a dedicated inventory table for item-level stock.",
     }
 
 
@@ -684,18 +834,90 @@ def recent_activity():
 
 @app.route("/admin/users")
 @jwt_required()
+@roles_required("owner", "admin")
 def users():
     me = get_user_from_token()
-    if not me:
-        return error_response("invalid token", 401)
+    return jsonify(
+        [
+            {"id": user.id, "email": user.email, "role": user.role}
+            for user in User.query.filter_by(org_id=me.org_id).order_by(User.id.asc())
+        ]
+    )
 
-    if me.role != "owner":
-        return error_response("owner only", 403)
 
-    return jsonify([
-        {"email": user.email, "role": user.role}
-        for user in User.query.filter_by(org_id=me.org_id)
-    ])
+@app.route("/admin/users", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin")
+@limiter.limit("20 per minute")
+def create_user():
+    me = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+    role = (data.get("role") or "cashier").strip().lower()
+
+    if not email or not password:
+        return error_response("email and password are required")
+    if len(password) < 8:
+        return error_response("password must be at least 8 characters")
+    if role not in VALID_ROLES:
+        return error_response("invalid role")
+    if User.query.filter_by(email=email).first():
+        return error_response("email already exists", 409)
+
+    hashed_password = bcrypt.generate_password_hash(password).decode()
+    db.session.add(User(email=email, password=hashed_password, role=role, org_id=me.org_id))
+    if not safe_commit():
+        return error_response("database error while creating user", 503)
+
+    log(me.id, f"created user {email} with role {role}")
+    return {"msg": "user created"}, 201
+
+
+@app.route("/admin/users/<int:user_id>/role", methods=["PATCH"])
+@jwt_required()
+@roles_required("owner", "admin")
+@limiter.limit("30 per minute")
+def update_user_role(user_id):
+    me = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    role = (data.get("role") or "").strip().lower()
+    if role not in VALID_ROLES:
+        return error_response("invalid role")
+
+    target = User.query.filter_by(id=user_id, org_id=me.org_id).first()
+    if not target:
+        return error_response("user not found", 404)
+    if target.id == me.id and role not in {"owner", "admin"}:
+        return error_response("cannot downgrade your own admin access", 400)
+
+    target.role = role
+    if not safe_commit():
+        return error_response("database error while updating role", 503)
+
+    log(me.id, f"updated role for {target.email} to {role}")
+    return {"msg": "role updated"}
+
+
+@app.route("/admin/users/<int:user_id>", methods=["DELETE"])
+@jwt_required()
+@roles_required("owner", "admin")
+@limiter.limit("20 per minute")
+def delete_user(user_id):
+    me = get_user_from_token()
+    target = User.query.filter_by(id=user_id, org_id=me.org_id).first()
+    if not target:
+        return error_response("user not found", 404)
+    if target.id == me.id:
+        return error_response("cannot delete your own account", 400)
+
+    clear_session(target.id)
+    db.session.delete(target)
+    if not safe_commit():
+        return error_response("database error while deleting user", 503)
+
+    log(me.id, f"deleted user {target.email}")
+    return {"msg": "user deleted"}
 
 
 # ---------------- HEALTH ----------------

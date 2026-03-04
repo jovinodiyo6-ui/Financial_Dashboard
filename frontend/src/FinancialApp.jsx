@@ -202,11 +202,17 @@ export default function App() {
 
   const [file, setFile] = useState(null);
   const [stats, setStats] = useState(null);
+  const [dashboardStats, setDashboardStats] = useState(null);
   const [loading, setLoading] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
   const [userCount, setUserCount] = useState(0);
   const [userCountUpdating, setUserCountUpdating] = useState(false);
   const [recentActivity, setRecentActivity] = useState([]);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [adminUsers, setAdminUsers] = useState([]);
+  const [adminEmail, setAdminEmail] = useState("");
+  const [adminPassword, setAdminPassword] = useState("");
+  const [adminRole, setAdminRole] = useState("cashier");
   const [maintenance, setMaintenance] = useState({
     maintenance: false,
     message: "[System Under Maintainance]",
@@ -556,7 +562,10 @@ export default function App() {
     setToken(null);
     persistToken(null);
     setStats(null);
+    setDashboardStats(null);
     setUserCount(0);
+    setCurrentUser(null);
+    setAdminUsers([]);
     setFile(null);
     setInfoMessage("Signed out.");
   };
@@ -601,6 +610,17 @@ export default function App() {
     setStats(data);
   };
 
+  const loadDashboardStats = async () => {
+    const data = await authorizedFetch("/dashboard");
+    setDashboardStats(data);
+  };
+
+  const loadCurrentUser = async () => {
+    const data = await authorizedFetch("/me");
+    setCurrentUser(data);
+    return data;
+  };
+
   const loadSystemStatus = async () => {
     const response = await fetch(`${API_URL}/system-status`);
     let payload = {};
@@ -640,6 +660,15 @@ export default function App() {
       }
     } catch {
       setRecentActivity([]);
+    }
+  };
+
+  const loadAdminUsers = async () => {
+    try {
+      const users = await authorizedFetch("/admin/users");
+      setAdminUsers(Array.isArray(users) ? users : []);
+    } catch {
+      setAdminUsers([]);
     }
   };
 
@@ -859,6 +888,57 @@ export default function App() {
     setBudgetTargets((current) => ({ ...current, [key]: value }));
   };
 
+  const createAdminUser = async () => {
+    setErrorMessage("");
+    setInfoMessage("");
+    if (!adminEmail || !adminPassword) {
+      setErrorMessage("Admin panel: email and password are required.");
+      return;
+    }
+    try {
+      await authorizedFetch("/admin/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: adminEmail.trim().toLowerCase(),
+          password: adminPassword,
+          role: adminRole,
+        }),
+      });
+      setAdminEmail("");
+      setAdminPassword("");
+      setAdminRole("cashier");
+      await loadAdminUsers();
+      setInfoMessage("User created.");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to create user.");
+    }
+  };
+
+  const changeAdminRole = async (userId, role) => {
+    try {
+      await authorizedFetch(`/admin/users/${userId}/role`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role }),
+      });
+      await loadAdminUsers();
+      setInfoMessage("Role updated.");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to update role.");
+    }
+  };
+
+  const removeAdminUser = async (userId) => {
+    try {
+      await authorizedFetch(`/admin/users/${userId}`, { method: "DELETE" });
+      await loadAdminUsers();
+      setInfoMessage("User deleted.");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to delete user.");
+    }
+  };
+
   useEffect(() => {
     let active = true;
 
@@ -914,6 +994,7 @@ export default function App() {
       themeToggle: { ...styles.themeToggle, border: "1px solid #60a5fa", color: "#bfdbfe" },
       layout: { ...styles.layout, background: "#0b1220" },
       sidebar: { ...styles.sidebar, background: "#0f172a", color: "#e2e8f0" },
+      sidebarMeta: { ...styles.sidebarMeta, color: "#93c5fd" },
       main: { ...styles.main, background: "#111827", color: "#e5e7eb" },
       card: { ...styles.card, background: "#1f2937", color: "#e5e7eb", boxShadow: "0 8px 20px rgba(0,0,0,0.3)" },
       input: { ...styles.input, background: "#0f172a", color: "#e5e7eb", border: "1px solid #334155" },
@@ -929,6 +1010,7 @@ export default function App() {
       totalLine: { ...styles.totalLine, color: "#e2e8f0" },
       sectionLine: { ...styles.sectionLine, color: "#93c5fd" },
       budgetField: { ...styles.budgetField, color: "#bfdbfe" },
+      kpiItem: { ...styles.kpiItem, background: "#0f172a", border: "1px solid #334155", color: "#e2e8f0" },
       activityItem: { ...styles.activityItem, borderBottom: "1px solid #334155" },
       activityTime: { ...styles.activityTime, color: "#93c5fd" },
     };
@@ -943,8 +1025,17 @@ export default function App() {
 
     const bootstrap = async () => {
       try {
-        await loadStats();
-        await Promise.all([loadLiveUserCount(), loadRecentActivity(), pingSession()]);
+        const me = await loadCurrentUser();
+        await Promise.all([
+          loadStats(),
+          loadDashboardStats(),
+          loadLiveUserCount(),
+          loadRecentActivity(),
+          pingSession(),
+        ]);
+        if (me?.role === "owner" || me?.role === "admin") {
+          await loadAdminUsers();
+        }
       } catch (error) {
         if (active) {
           setErrorMessage(error.message || "Session error. Please sign in again.");
@@ -957,7 +1048,7 @@ export default function App() {
 
     const interval = setInterval(async () => {
       try {
-        await Promise.all([loadLiveUserCount(), loadRecentActivity(), pingSession()]);
+        await Promise.all([loadLiveUserCount(), loadRecentActivity(), loadDashboardStats(), pingSession()]);
       } catch {
         // Silent polling failure to avoid noisy UI.
       }
@@ -1154,9 +1245,12 @@ export default function App() {
 
       <div style={themedStyles.sidebar} className="sidebar">
         <h2>Financial Analytics Platform</h2>
+        <p style={themedStyles.sidebarMeta}>{currentUser?.email || "User"}</p>
+        <p style={themedStyles.sidebarMeta}>Role: {currentUser?.role || "member"}</p>
         <p>Dashboard</p>
         <p>Reports</p>
         <p>Statements</p>
+        {(currentUser?.role === "owner" || currentUser?.role === "admin") ? <p>Admin Panel</p> : null}
         <button onClick={toggleTheme} style={themedStyles.secondaryButton}>
           {isDarkMode ? "Light Mode" : "Dark Mode"}
         </button>
@@ -1196,6 +1290,80 @@ export default function App() {
             <p style={themedStyles.updateIndicator}>No activity yet.</p>
           )}
         </div>
+
+        <div style={themedStyles.card}>
+          <h3>Secure Dashboard Metrics</h3>
+          <div style={themedStyles.kpiGrid}>
+            <div style={themedStyles.kpiItem}>Sales: {formatMoney(dashboardStats?.sales || 0)}</div>
+            <div style={themedStyles.kpiItem}>Expenses: {formatMoney(dashboardStats?.expenses || 0)}</div>
+            <div style={themedStyles.kpiItem}>Profit: {formatMoney(dashboardStats?.profit || 0)}</div>
+            <div style={themedStyles.kpiItem}>Inventory: {formatMoney(dashboardStats?.inventory_value || 0)}</div>
+          </div>
+        </div>
+
+        {(currentUser?.role === "owner" || currentUser?.role === "admin") ? (
+          <div style={themedStyles.card}>
+            <h3>Admin Panel</h3>
+            <div style={themedStyles.adminCreateGrid}>
+              <input
+                placeholder="New user email"
+                value={adminEmail}
+                onChange={(event) => setAdminEmail(event.target.value)}
+                style={themedStyles.tableInput}
+              />
+              <input
+                placeholder="Temporary password"
+                type="password"
+                value={adminPassword}
+                onChange={(event) => setAdminPassword(event.target.value)}
+                style={themedStyles.tableInput}
+              />
+              <select value={adminRole} onChange={(event) => setAdminRole(event.target.value)} style={themedStyles.tableInput}>
+                <option value="admin">admin</option>
+                <option value="accountant">accountant</option>
+                <option value="manager">manager</option>
+                <option value="cashier">cashier</option>
+                <option value="member">member</option>
+              </select>
+              <button onClick={createAdminUser} style={themedStyles.button}>Create User</button>
+            </div>
+            <div style={themedStyles.tableWrap}>
+              <table style={themedStyles.table}>
+                <thead>
+                  <tr>
+                    <th style={themedStyles.th}>Email</th>
+                    <th style={themedStyles.th}>Role</th>
+                    <th style={themedStyles.th}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {adminUsers.map((user) => (
+                    <tr key={user.id}>
+                      <td style={themedStyles.td}>{user.email}</td>
+                      <td style={themedStyles.td}>
+                        <select
+                          value={user.role}
+                          onChange={(event) => changeAdminRole(user.id, event.target.value)}
+                          style={themedStyles.tableInput}
+                        >
+                          <option value="owner">owner</option>
+                          <option value="admin">admin</option>
+                          <option value="accountant">accountant</option>
+                          <option value="manager">manager</option>
+                          <option value="cashier">cashier</option>
+                          <option value="member">member</option>
+                        </select>
+                      </td>
+                      <td style={themedStyles.td}>
+                        <button onClick={() => removeAdminUser(user.id)} style={themedStyles.deleteButton}>Delete</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : null}
 
         <div style={themedStyles.card}>
           <input
@@ -1698,6 +1866,11 @@ const styles = {
     borderRadius: 8,
     cursor: "pointer",
   },
+  sidebarMeta: {
+    margin: "4px 0",
+    color: "#bfdbfe",
+    fontSize: 12,
+  },
   liveUserCard: {
     background: "linear-gradient(135deg, #0b1f3a 0%, #1d4e89 55%, #60a5fa 100%)",
     color: "white",
@@ -1829,6 +2002,26 @@ const styles = {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
     gap: 10,
+    alignItems: "center",
+  },
+  kpiGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+    gap: 10,
+  },
+  kpiItem: {
+    background: "#eff6ff",
+    border: "1px solid #bfdbfe",
+    borderRadius: 8,
+    padding: "10px 12px",
+    fontWeight: 600,
+    color: "#0b1f3a",
+  },
+  adminCreateGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+    gap: 10,
+    marginBottom: 12,
     alignItems: "center",
   },
   activityList: {
