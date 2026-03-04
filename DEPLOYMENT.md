@@ -33,10 +33,7 @@ Environment variables:
 - `JWT_SECRET_KEY=<strong-random-secret>`
 - `DATABASE_URL=<supabase-uri-with-sslmode-require>`
 - `FLASK_SECRET_KEY=<strong-random-secret>`
-- `GOOGLE_CLIENT_ID=<google-oauth-client-id>`
-- `GOOGLE_CLIENT_SECRET=<google-oauth-client-secret>`
 - `FRONTEND_URL=https://<your-vercel-domain>`
-- `GOOGLE_ALLOWED_REDIRECT_ORIGINS=https://<your-vercel-domain>`
 
 ## 3. Frontend on Vercel
 
@@ -48,9 +45,6 @@ Project settings:
 Environment variable:
 - `VITE_API_URL=https://<your-render-service>.onrender.com`
 
-Google OAuth callback URI to configure in Google Cloud Console:
-
-- `https://<your-render-service>.onrender.com/auth/google/callback`
 
 ## 4. Verify Deployment
 

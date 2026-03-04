@@ -1,5 +1,5 @@
 from pathlib import Path
-from flask import Flask, request, jsonify, redirect, url_for, session
+from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from flask_bcrypt import Bcrypt
@@ -11,8 +11,6 @@ import hashlib
 import datetime
 import json
 import os
-import urllib.parse
-import urllib.request
 import pandas as pd
 from dotenv import load_dotenv
 
@@ -24,11 +22,6 @@ except Exception:  # pragma: no cover - runtime fallback for missing optional de
 
     def get_remote_address():
         return "0.0.0.0"
-
-try:
-    from authlib.integrations.flask_client import OAuth
-except Exception:  # pragma: no cover - runtime fallback for missing optional dependency
-    OAuth = None
 
 load_dotenv()
 
@@ -96,20 +89,6 @@ else:
             return _decorator
 
     limiter = _NoopLimiter()
-
-oauth = OAuth(app) if OAuth else None
-
-GOOGLE_CLIENT_ID = (os.getenv("GOOGLE_CLIENT_ID") or "").strip()
-GOOGLE_CLIENT_SECRET = (os.getenv("GOOGLE_CLIENT_SECRET") or "").strip()
-google = None
-if oauth and GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET:
-    google = oauth.register(
-        name="google",
-        client_id=GOOGLE_CLIENT_ID,
-        client_secret=GOOGLE_CLIENT_SECRET,
-        server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
-        client_kwargs={"scope": "openid email profile"},
-    )
 
 # ---------------- DATABASE ----------------
 
@@ -292,30 +271,6 @@ def aggregate_org_reports(org_id):
     }
 
 
-def resolve_frontend_redirect(candidate):
-    default_url = (os.getenv("FRONTEND_URL") or "http://localhost:5173").strip()
-    allowed_raw = (os.getenv("GOOGLE_ALLOWED_REDIRECT_ORIGINS") or "").strip()
-    allowed_origins = {default_url.rstrip("/")}
-    if allowed_raw:
-        allowed_origins.update(origin.strip().rstrip("/") for origin in allowed_raw.split(",") if origin.strip())
-
-    if candidate:
-        parsed = urllib.parse.urlparse(candidate)
-        candidate_origin = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
-        if parsed.scheme in {"http", "https"} and candidate_origin in allowed_origins:
-            return candidate
-
-    return default_url
-
-
-def append_query(url, params):
-    parsed = urllib.parse.urlparse(url)
-    existing = dict(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
-    existing.update(params)
-    query = urllib.parse.urlencode(existing)
-    return urllib.parse.urlunparse(parsed._replace(query=query))
-
-
 def maintenance_state():
     enabled = (os.getenv("MAINTENANCE_MODE", "0").strip().lower() in {"1", "true", "yes", "on"})
     message = (os.getenv("MAINTENANCE_MESSAGE", MAINTENANCE_DEFAULT_MESSAGE) or MAINTENANCE_DEFAULT_MESSAGE).strip()
@@ -393,32 +348,6 @@ def normalize_ledger_dataframe(df):
             raise ValueError("depreciation cannot be negative")
 
     return normalized[["account", "type", "subtype", "amount", "depreciation"]]
-
-
-def verify_google_credential(credential):
-    tokeninfo_url = (
-        "https://oauth2.googleapis.com/tokeninfo?"
-        + urllib.parse.urlencode({"id_token": credential})
-    )
-    try:
-        with urllib.request.urlopen(tokeninfo_url, timeout=8) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except Exception as exc:
-        raise ValueError("invalid google credential") from exc
-
-    if payload.get("error") or payload.get("error_description"):
-        raise ValueError("invalid google credential")
-
-    expected_client_id = os.getenv("GOOGLE_CLIENT_ID", "").strip()
-    token_audience = (payload.get("aud") or "").strip()
-    if expected_client_id and token_audience != expected_client_id:
-        raise ValueError("google client mismatch")
-
-    email_verified = payload.get("email_verified")
-    if email_verified not in (True, "true", "True"):
-        raise ValueError("google email is not verified")
-
-    return payload
 
 
 def calc(df):
@@ -549,114 +478,6 @@ def login():
     touch_session(user.id)
     log(user.id, "logged in")
     return {"token": create_access_token(identity=str(user.id))}
-
-
-@app.route("/auth/google", methods=["POST"])
-@limiter.limit("20 per minute")
-def auth_google():
-    data = request.get_json(silent=True) or {}
-    credential = (data.get("credential") or "").strip()
-    if not credential:
-        return error_response("google credential is required")
-
-    try:
-        google_payload = verify_google_credential(credential)
-    except ValueError as exc:
-        return error_response(str(exc), 401)
-
-    email = (google_payload.get("email") or "").strip().lower()
-    if not email:
-        return error_response("google account email missing", 401)
-
-    user = User.query.filter_by(email=email).first()
-    created = False
-    if not user:
-        derived_org = ((email.split("@")[0] if "@" in email else email) or "My Business")[:100]
-        random_password = os.urandom(24).hex()
-        hashed_password = bcrypt.generate_password_hash(random_password).decode()
-
-        try:
-            org = Organization(name=derived_org)
-            db.session.add(org)
-            db.session.flush()
-            user = User(email=email, password=hashed_password, role="owner", org_id=org.id)
-            db.session.add(user)
-            if not safe_commit():
-                return error_response("database error during google auth", 503)
-            created = True
-        except SQLAlchemyError:
-            db.session.rollback()
-            return error_response("database error during google auth", 503)
-
-    touch_session(user.id)
-    log(user.id, "logged in with google")
-    token = create_access_token(identity=str(user.id))
-    return {"token": token, "email": user.email, "created": created}
-
-
-@app.route("/login/google")
-@limiter.limit("20 per minute")
-def login_google():
-    if not google:
-        return error_response("google oauth is not configured on server", 503)
-
-    frontend_redirect = resolve_frontend_redirect((request.args.get("redirect_uri") or "").strip())
-    session["google_frontend_redirect"] = frontend_redirect
-    callback_uri = url_for("google_callback", _external=True)
-    return google.authorize_redirect(callback_uri)
-
-
-@app.route("/auth/google/callback")
-@limiter.limit("20 per minute")
-def google_callback():
-    frontend_redirect = resolve_frontend_redirect(session.pop("google_frontend_redirect", ""))
-    if not google:
-        return redirect(append_query(frontend_redirect, {"oauth_error": "google oauth not configured"}))
-
-    try:
-        token = google.authorize_access_token()
-        user_info = token.get("userinfo")
-        if not user_info:
-            user_info = google.get("userinfo").json()
-    except Exception:
-        return redirect(append_query(frontend_redirect, {"oauth_error": "google login failed"}))
-
-    email = (user_info.get("email") or "").strip().lower()
-    if not email:
-        return redirect(append_query(frontend_redirect, {"oauth_error": "google email missing"}))
-
-    user = User.query.filter_by(email=email).first()
-    created = False
-    if not user:
-        derived_org = ((email.split("@")[0] if "@" in email else email) or "My Business")[:100]
-        random_password = os.urandom(24).hex()
-        hashed_password = bcrypt.generate_password_hash(random_password).decode()
-        try:
-            org = Organization(name=derived_org)
-            db.session.add(org)
-            db.session.flush()
-            user = User(email=email, password=hashed_password, role="owner", org_id=org.id)
-            db.session.add(user)
-            if not safe_commit():
-                return redirect(append_query(frontend_redirect, {"oauth_error": "database error"}))
-            created = True
-        except SQLAlchemyError:
-            db.session.rollback()
-            return redirect(append_query(frontend_redirect, {"oauth_error": "database error"}))
-
-    touch_session(user.id)
-    log(user.id, "logged in with google oauth redirect")
-    jwt_token = create_access_token(identity=str(user.id))
-    return redirect(
-        append_query(
-            frontend_redirect,
-            {
-                "oauth_token": jwt_token,
-                "oauth_email": user.email,
-                "oauth_created": "1" if created else "0",
-            },
-        )
-    )
 
 
 # ---------------- INVITE USER ----------------

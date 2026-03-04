@@ -1,11 +1,10 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from "recharts";
 
 const API_URL = (import.meta.env.VITE_API_URL || "/api").trim();
 const TOKEN_KEY = "financepro_token";
 const LAST_EMAIL_KEY = "financepro_last_email";
 const THEME_KEY = "financepro_theme";
-const GOOGLE_CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID || "").trim();
 
 const readStoredToken = () => {
   try {
@@ -198,7 +197,6 @@ export default function App() {
   const [showSignupPassword, setShowSignupPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [themeMode, setThemeMode] = useState(() => readStoredTheme());
-  const googleButtonRef = useRef(null);
 
   const [file, setFile] = useState(null);
   const [stats, setStats] = useState(null);
@@ -225,33 +223,6 @@ export default function App() {
   const [quickAmount, setQuickAmount] = useState("");
   const [quickEntryId, setQuickEntryId] = useState(QUICK_ENTRY_TEMPLATES[0].id);
   const isDarkMode = themeMode === "dark";
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const oauthToken = params.get("oauth_token");
-    const oauthEmail = params.get("oauth_email");
-    const oauthError = params.get("oauth_error");
-    const oauthCreated = params.get("oauth_created");
-    if (!oauthToken && !oauthError) {
-      return;
-    }
-
-    if (oauthToken) {
-      setToken(oauthToken);
-      persistToken(oauthToken);
-      if (oauthEmail) {
-        setEmail(oauthEmail);
-        persistEmail(oauthEmail);
-      }
-      setInfoMessage(oauthCreated === "1" ? "Google account created and signed in." : "Signed in with Google.");
-    } else if (oauthError) {
-      setErrorMessage(oauthError);
-    }
-
-    ["oauth_token", "oauth_email", "oauth_error", "oauth_created"].forEach((k) => params.delete(k));
-    const next = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ""}`;
-    window.history.replaceState({}, "", next);
-  }, []);
 
   const chartData = useMemo(() => {
     if (!stats) {
@@ -595,46 +566,6 @@ export default function App() {
     setAdminUsers([]);
     setFile(null);
     setInfoMessage("Signed out.");
-  };
-
-  const loginWithGoogleRedirect = () => {
-    const redirectUri = encodeURIComponent(window.location.origin);
-    window.location.href = `${API_URL}/login/google?redirect_uri=${redirectUri}`;
-  };
-
-  const continueWithGoogle = async (credential) => {
-    setErrorMessage("");
-    setInfoMessage("");
-    if (!credential) {
-      setErrorMessage("Google sign-in failed. Please try again.");
-      return;
-    }
-
-    setAuthLoading(true);
-    try {
-      const response = await fetch(`${API_URL}/auth/google`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ credential }),
-      });
-
-      const data = await response.json();
-      if (!response.ok || !data.token) {
-        throw new Error(data.error || "Google login failed");
-      }
-
-      setToken(data.token);
-      persistToken(data.token);
-      if (data.email) {
-        setEmail(data.email);
-        persistEmail(data.email);
-      }
-      setInfoMessage(data.created ? "Google account created and signed in." : "Signed in with Google.");
-    } catch (error) {
-      setErrorMessage(error.message || "Google login failed");
-    } finally {
-      setAuthLoading(false);
-    }
   };
 
   const loadStats = async () => {
@@ -1019,12 +950,6 @@ export default function App() {
       },
       eyeToggle: { ...styles.eyeToggle, color: "#cbd5e1" },
       authPrimaryButton: { ...styles.authPrimaryButton, background: "#2563eb" },
-      oauthRedirectButton: {
-        ...styles.oauthRedirectButton,
-        background: "#0f172a",
-        color: "#e2e8f0",
-        border: "1px solid #334155",
-      },
       authSwitchText: { ...styles.authSwitchText, color: "#cbd5e1" },
       authDivider: { ...styles.authDivider, color: "#94a3b8" },
       inlineLink: { ...styles.inlineLink, color: "#93c5fd" },
@@ -1098,31 +1023,6 @@ export default function App() {
     };
   }, [token]);
 
-  useEffect(() => {
-    if (token || !GOOGLE_CLIENT_ID || !googleButtonRef.current) {
-      return;
-    }
-
-    const googleSdk = window.google?.accounts?.id;
-    if (!googleSdk) {
-      return;
-    }
-
-    googleButtonRef.current.innerHTML = "";
-    googleSdk.initialize({
-      client_id: GOOGLE_CLIENT_ID,
-      callback: (response) => continueWithGoogle(response.credential),
-    });
-    googleSdk.renderButton(googleButtonRef.current, {
-      type: "standard",
-      shape: "rectangular",
-      theme: "outline",
-      text: "continue_with",
-      size: "large",
-      width: 320,
-    });
-  }, [token, authMode]);
-
   if (!token) {
     return (
       <div style={themedStyles.center}>
@@ -1165,11 +1065,6 @@ export default function App() {
               </button>
               <button onClick={login} style={themedStyles.authPrimaryButton} disabled={authLoading}>
                 {authLoading ? "Signing in..." : "Login"}
-              </button>
-              <div style={themedStyles.authDivider}><span>or</span></div>
-              {GOOGLE_CLIENT_ID ? <div ref={googleButtonRef} style={themedStyles.googleButtonWrap} /> : null}
-              <button type="button" onClick={loginWithGoogleRedirect} style={themedStyles.oauthRedirectButton}>
-                Sign in with Google (Redirect)
               </button>
               <p style={themedStyles.authSwitchText}>
                 Don't have an account?{" "}
@@ -1234,11 +1129,6 @@ export default function App() {
               />
               <button onClick={register} style={themedStyles.authPrimaryButton} disabled={authLoading}>
                 {authLoading ? "Creating..." : "Signup"}
-              </button>
-              <div style={themedStyles.authDivider}><span>or</span></div>
-              {GOOGLE_CLIENT_ID ? <div ref={googleButtonRef} style={themedStyles.googleButtonWrap} /> : null}
-              <button type="button" onClick={loginWithGoogleRedirect} style={themedStyles.oauthRedirectButton}>
-                Continue with Google (Redirect)
               </button>
               <p style={themedStyles.authSwitchText}>
                 Already have an account?{" "}
@@ -1803,17 +1693,6 @@ const styles = {
     cursor: "pointer",
     marginTop: 4,
   },
-  oauthRedirectButton: {
-    width: "100%",
-    border: "1px solid #d6dce5",
-    borderRadius: 6,
-    background: "#ffffff",
-    color: "#1b2c42",
-    fontWeight: 600,
-    padding: "10px 12px",
-    cursor: "pointer",
-    marginTop: 8,
-  },
   authSwitchText: {
     margin: "12px 0 2px 0",
     textAlign: "center",
@@ -1827,11 +1706,6 @@ const styles = {
     color: "#8b95a3",
     fontSize: 12,
     fontWeight: 600,
-  },
-  googleButtonWrap: {
-    display: "flex",
-    justifyContent: "center",
-    marginBottom: 6,
   },
   inlineLink: {
     border: "none",
