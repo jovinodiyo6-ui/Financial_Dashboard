@@ -13,6 +13,17 @@ import json
 import os
 import pandas as pd
 from dotenv import load_dotenv
+from io import StringIO
+
+try:
+    import pdfplumber
+except Exception:  # pragma: no cover - optional dependency
+    pdfplumber = None
+
+try:
+    import docx
+except Exception:  # pragma: no cover - optional dependency
+    docx = None
 
 try:
     from flask_limiter import Limiter
@@ -56,7 +67,7 @@ if ENV == "production" and DATABASE_URL.startswith("sqlite"):
 app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
 app.config["JWT_SECRET_KEY"] = JWT_SECRET or "dev-only-secret-change-me"
 app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", JWT_SECRET or "dev-flask-secret-change-me")
-app.config["JWT_ACCESS_TOKEN_EXPIRES"] = datetime.timedelta(hours=8)
+app.config["JWT_ACCESS_TOKEN_EXPIRES"] = datetime.timedelta(days=7)
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["MAX_CONTENT_LENGTH"] = 5 * 1024 * 1024  # 5 MB upload cap
 app.config["SESSION_COOKIE_SECURE"] = ENV == "production"
@@ -109,7 +120,15 @@ class User(db.Model):
 class Report(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=True)
     data = db.Column(db.Text, nullable=False)
+
+
+class Company(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    name = db.Column(db.String(120), nullable=False)
+    business_type = db.Column(db.String(50), nullable=False, default="sole_proprietor")
 
 
 class APIKey(db.Model):
@@ -144,6 +163,11 @@ with app.app_context():
     if ENV != "production":
         try:
             db.create_all()
+            inspector = db.inspect(db.engine)
+            report_columns = {column["name"] for column in inspector.get_columns("report")}
+            if "company_id" not in report_columns:
+                db.session.execute(text("ALTER TABLE report ADD COLUMN company_id INTEGER"))
+                db.session.commit()
         except OperationalError as exc:
             if "already exists" not in str(exc).lower():
                 raise
@@ -194,6 +218,17 @@ def get_user_from_token():
     return db.session.get(User, user_id)
 
 
+def build_access_token(user):
+    return create_access_token(
+        identity=str(user.id),
+        additional_claims={
+            "email": user.email,
+            "org_id": user.org_id,
+            "role": user.role,
+        },
+    )
+
+
 def roles_required(*allowed_roles):
     allowed = set(allowed_roles)
 
@@ -233,7 +268,9 @@ def touch_session(user_id):
 
 
 def clear_session(user_id):
-    ActiveSession.query.filter_by(user_id=user_id).delete()
+    session = ActiveSession.query.filter_by(user_id=user_id).first()
+    if session:
+        db.session.delete(session)
     safe_commit()
 
 
@@ -247,8 +284,11 @@ def active_user_count_for_org(org_id, online_window_minutes=5):
     )
 
 
-def aggregate_org_reports(org_id):
-    reports = Report.query.filter_by(org_id=org_id).all()
+def aggregate_org_reports(org_id, company_id=None):
+    query = Report.query.filter_by(org_id=org_id)
+    if company_id is not None:
+        query = query.filter_by(company_id=company_id)
+    reports = query.all()
     revenue_total = 0.0
     expense_total = 0.0
     assets_total = 0.0
@@ -269,6 +309,33 @@ def aggregate_org_reports(org_id):
         "profit": round(revenue_total - expense_total, 2),
         "total_assets": round(assets_total, 2),
     }
+
+
+def get_or_create_default_company(org_id, name="Main Company"):
+    company = Company.query.filter_by(org_id=org_id).order_by(Company.id.asc()).first()
+    if company:
+        return company
+
+    company = Company(org_id=org_id, name=name, business_type="sole_proprietor")
+    db.session.add(company)
+    safe_commit()
+    return company
+
+
+def parse_company_id(raw_value):
+    if raw_value in {None, ""}:
+        return None
+    try:
+        return int(raw_value)
+    except (TypeError, ValueError):
+        return None
+
+
+def resolve_company_for_user(user, raw_company_id=None):
+    company_id = parse_company_id(raw_company_id)
+    if company_id is None:
+        return get_or_create_default_company(user.org_id)
+    return Company.query.filter_by(id=company_id, org_id=user.org_id).first()
 
 
 def maintenance_state():
@@ -295,8 +362,49 @@ def read_external_dataframe(uploaded_file):
         return pd.read_excel(uploaded_file)
     if suffix == ".json":
         return pd.read_json(uploaded_file)
+    if suffix == ".pdf":
+        if pdfplumber is None:
+            raise ValueError("pdf support is not installed")
 
-    raise ValueError("unsupported file type; use CSV, XLS, XLSX, TXT, or JSON")
+        rows = []
+        with pdfplumber.open(uploaded_file) as pdf:
+            for page in pdf.pages:
+                tables = page.extract_tables() or []
+                for table in tables:
+                    rows.extend(table)
+
+                if not tables:
+                    text = page.extract_text() or ""
+                    for line in text.splitlines():
+                        parts = [part.strip() for part in line.split() if part.strip()]
+                        if parts:
+                            rows.append(parts)
+
+        if not rows:
+            raise ValueError("no readable rows found in pdf")
+
+        header, *data_rows = rows
+        return pd.DataFrame(data_rows, columns=header) if data_rows else pd.DataFrame(rows)
+    if suffix in {".doc", ".docx"}:
+        if docx is None:
+            raise ValueError("word support is not installed")
+
+        document = docx.Document(uploaded_file)
+        rows = []
+        for table in document.tables:
+            for row in table.rows:
+                rows.append([cell.text.strip() for cell in row.cells])
+
+        if rows:
+            header, *data_rows = rows
+            return pd.DataFrame(data_rows, columns=header) if data_rows else pd.DataFrame(rows)
+
+        text_rows = [line for line in (paragraph.text.strip() for paragraph in document.paragraphs) if line]
+        if not text_rows:
+            raise ValueError("no readable rows found in word document")
+        return pd.read_csv(StringIO("\n".join(text_rows)))
+
+    raise ValueError("unsupported file type; use CSV, XLS, XLSX, TXT, JSON, PDF, or Word")
 
 
 def normalize_ledger_dataframe(df):
@@ -305,11 +413,13 @@ def normalize_ledger_dataframe(df):
         key = str(column).strip().lower()
         if key in {"account", "name"}:
             rename_map[column] = "account"
+        elif key in {"account name", "description"}:
+            rename_map[column] = "account"
         elif key == "type":
             rename_map[column] = "type"
         elif key in {"subtype", "class", "category"}:
             rename_map[column] = "subtype"
-        elif key in {"amount", "value"}:
+        elif key in {"amount", "value", "debit", "dr", "credit", "cr"}:
             rename_map[column] = "amount"
         elif key in {"depreciation", "depreciation_amount"}:
             rename_map[column] = "depreciation"
@@ -446,6 +556,7 @@ def register():
         org = Organization(name=org_name)
         db.session.add(org)
         db.session.flush()
+        db.session.add(Company(org_id=org.id, name=org_name, business_type="sole_proprietor"))
         user = User(email=email, password=hashed_password, role="owner", org_id=org.id)
         db.session.add(user)
         if not safe_commit():
@@ -473,11 +584,22 @@ def login():
     user = User.query.filter_by(email=email).first()
 
     if not user or not bcrypt.check_password_hash(user.password, password):
-        return error_response("bad login", 401)
+        return error_response("invalid email or password", 401)
 
     touch_session(user.id)
     log(user.id, "logged in")
-    return {"token": create_access_token(identity=str(user.id))}
+    return {"token": build_access_token(user)}
+
+
+@app.route("/refresh", methods=["POST"])
+@jwt_required()
+def refresh():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    touch_session(user.id)
+    return {"token": build_access_token(user)}
 
 
 # ---------------- INVITE USER ----------------
@@ -541,18 +663,25 @@ def analyze():
     if not uploaded_file:
         return error_response("file is required")
 
+    company = resolve_company_for_user(user, request.form.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
     try:
-        df = pd.read_csv(uploaded_file)
+        df = read_external_dataframe(uploaded_file)
+        lowered_columns = {str(column).strip().lower() for column in df.columns}
+        if "type" in lowered_columns and "amount" in lowered_columns:
+            df = normalize_ledger_dataframe(df)
         result = calc(df)
     except Exception as exc:
-        return error_response(f"invalid csv: {exc}")
+        return error_response(f"invalid file: {exc}")
 
     org.usage += 1
-    db.session.add(Report(org_id=org.id, data=json.dumps(result)))
+    db.session.add(Report(org_id=org.id, company_id=company.id, data=json.dumps(result)))
     if not safe_commit():
         return error_response("database error while saving report", 503)
 
-    log(user.id, "generated report")
+    log(user.id, f"generated report for {company.name}")
     return result
 
 
@@ -596,6 +725,59 @@ def extract_ledger():
     return {"ledger_rows": ledger_rows, "summary": summary}
 
 
+@app.route("/companies")
+@jwt_required()
+def list_companies():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    companies = Company.query.filter_by(org_id=user.org_id).order_by(Company.id.asc()).all()
+    if not companies:
+        companies = [get_or_create_default_company(user.org_id)]
+
+    return jsonify(
+        [
+            {
+                "id": company.id,
+                "name": company.name,
+                "business_type": company.business_type,
+            }
+            for company in companies
+        ]
+    )
+
+
+@app.route("/companies", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin")
+def create_company():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    business_type = (data.get("business_type") or "sole_proprietor").strip().lower()
+
+    if not name:
+        return error_response("company name is required")
+    if business_type not in {"sole_proprietor", "partnership", "manufacturing"}:
+        return error_response("invalid business type")
+
+    company = Company(org_id=user.org_id, name=name, business_type=business_type)
+    db.session.add(company)
+    if not safe_commit():
+        return error_response("database error while creating company", 503)
+
+    log(user.id, f"created company {name}")
+    return {
+        "id": company.id,
+        "name": company.name,
+        "business_type": company.business_type,
+    }, 201
+
+
 # ---------------- API KEY ----------------
 
 @app.route("/apikey", methods=["POST"])
@@ -624,7 +806,15 @@ def me():
     if not user:
         return error_response("invalid token", 401)
 
-    return {"id": user.id, "email": user.email, "role": user.role, "org_id": user.org_id}
+    company = get_or_create_default_company(user.org_id)
+    return {
+        "id": user.id,
+        "email": user.email,
+        "role": user.role,
+        "org_id": user.org_id,
+        "default_company_id": company.id,
+        "business_type": company.business_type,
+    }
 
 
 @app.route("/analytics")
@@ -657,13 +847,15 @@ def dashboard_summary():
     if not org:
         return error_response("organization not found", 404)
 
-    report_totals = aggregate_org_reports(org.id)
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    report_totals = aggregate_org_reports(org.id, company.id if company else None)
     return {
         "sales": report_totals["revenue"],
         "expenses": report_totals["expenses"],
         "profit": report_totals["profit"],
         "inventory_value": report_totals["total_assets"],
         "active_users": active_user_count_for_org(org.id),
+        "company_id": company.id if company else None,
     }
 
 

@@ -5,6 +5,7 @@ const API_URL = (import.meta.env.VITE_API_URL || "/api").trim();
 const TOKEN_KEY = "financepro_token";
 const LAST_EMAIL_KEY = "financepro_last_email";
 const THEME_KEY = "financepro_theme";
+const BUSINESS_TYPE_KEY = "financepro_business_type";
 
 const readStoredToken = () => {
   try {
@@ -63,11 +64,53 @@ const persistTheme = (theme) => {
   }
 };
 
+const readStoredBusinessType = () => {
+  try {
+    const stored = localStorage.getItem(BUSINESS_TYPE_KEY);
+    if (stored === "partnership" || stored === "manufacturing" || stored === "sole_proprietor") {
+      return stored;
+    }
+  } catch {
+    // Ignore storage failures.
+  }
+  return "sole_proprietor";
+};
+
+const persistBusinessType = (businessType) => {
+  try {
+    localStorage.setItem(BUSINESS_TYPE_KEY, businessType);
+  } catch {
+    // Ignore storage failures.
+  }
+};
+
+const BUSINESS_TYPE_OPTIONS = [
+  {
+    value: "sole_proprietor",
+    label: "Sole Proprietorship",
+    description: "Trading account, profit and loss, and balance sheet for a single owner.",
+  },
+  {
+    value: "partnership",
+    label: "Partnership",
+    description: "Adds appropriation and partner capital schedules on top of standard statements.",
+  },
+  {
+    value: "manufacturing",
+    label: "Manufacturing Company",
+    description: "Adds a manufacturing account and cost of production before trading profit.",
+  },
+];
+
 const ACCOUNT_CATALOG = [
+  { account: "Opening Stock", type: "asset", subtype: "current" },
+  { account: "Closing Stock", type: "asset", subtype: "current" },
   { account: "Cash", type: "asset", subtype: "current" },
   { account: "Cash and Cash Equivalents", type: "asset", subtype: "current" },
   { account: "Accounts Receivable", type: "asset", subtype: "current" },
   { account: "Inventory", type: "asset", subtype: "current" },
+  { account: "Raw Materials Opening Stock", type: "asset", subtype: "current" },
+  { account: "Closing Raw Materials", type: "asset", subtype: "current" },
   { account: "Prepaid Expenses", type: "asset", subtype: "current" },
   { account: "Accrued Expenses", type: "liability", subtype: "current" },
   { account: "Land and Buildings", type: "asset", subtype: "non-current" },
@@ -82,12 +125,20 @@ const ACCOUNT_CATALOG = [
   { account: "Owner Capital", type: "capital", subtype: "equity" },
   { account: "Drawings", type: "drawings", subtype: "equity" },
   { account: "Gross Sales", type: "revenue", subtype: "operating" },
+  { account: "Sales Returns", type: "expense", subtype: "operating" },
   { account: "Goods Return", type: "expense", subtype: "operating" },
   { account: "Discounts", type: "expense", subtype: "operating" },
   { account: "Bad Debts", type: "expense", subtype: "operating" },
   { account: "Sales Revenue", type: "revenue", subtype: "operating" },
   { account: "Service Revenue", type: "revenue", subtype: "operating" },
   { account: "Purchases", type: "expense", subtype: "operating" },
+  { account: "Returns Outwards", type: "expense", subtype: "operating" },
+  { account: "Carriage Inwards", type: "expense", subtype: "operating" },
+  { account: "Direct Labour", type: "expense", subtype: "operating" },
+  { account: "Factory Expenses", type: "expense", subtype: "operating" },
+  { account: "Factory Overheads", type: "expense", subtype: "operating" },
+  { account: "Partner Salary", type: "expense", subtype: "operating" },
+  { account: "Interest on Capital", type: "expense", subtype: "operating" },
   { account: "Cost of Goods Sold", type: "expense", subtype: "operating" },
   { account: "Interest Received", type: "revenue", subtype: "other" },
   { account: "Rental Income", type: "revenue", subtype: "other" },
@@ -122,10 +173,71 @@ const INITIAL_LEDGER_ROWS = ACCOUNT_CATALOG.map((entry, index) => ({
   depreciation: "",
 }));
 
+const createLedgerRows = (entries) =>
+  entries.map((entry, index) => ({
+    id: index + 1,
+    account: entry.account,
+    type: entry.type,
+    subtype: entry.subtype,
+    amount: entry.amount ?? "",
+    depreciation: entry.depreciation ?? "",
+  }));
+
+const BUSINESS_TEMPLATE_ROWS = {
+  sole_proprietor: createLedgerRows([
+    { account: "Opening Stock", type: "asset", subtype: "current" },
+    { account: "Purchases", type: "expense", subtype: "operating" },
+    { account: "Sales Revenue", type: "revenue", subtype: "operating" },
+    { account: "Returns Outwards", type: "expense", subtype: "operating" },
+    { account: "Sales Returns", type: "expense", subtype: "operating" },
+    { account: "Carriage Inwards", type: "expense", subtype: "operating" },
+    { account: "Closing Stock", type: "asset", subtype: "current" },
+    { account: "Payroll Expenses", type: "expense", subtype: "operating" },
+    { account: "Rent Expense", type: "expense", subtype: "operating" },
+    { account: "Utilities Expense", type: "expense", subtype: "operating" },
+    { account: "Owner Capital", type: "capital", subtype: "equity" },
+    { account: "Drawings", type: "drawings", subtype: "equity" },
+    { account: "Cash", type: "asset", subtype: "current" },
+    { account: "Accounts Payable", type: "liability", subtype: "current" },
+  ]),
+  partnership: createLedgerRows([
+    { account: "Opening Stock", type: "asset", subtype: "current" },
+    { account: "Purchases", type: "expense", subtype: "operating" },
+    { account: "Sales Revenue", type: "revenue", subtype: "operating" },
+    { account: "Returns Outwards", type: "expense", subtype: "operating" },
+    { account: "Sales Returns", type: "expense", subtype: "operating" },
+    { account: "Carriage Inwards", type: "expense", subtype: "operating" },
+    { account: "Closing Stock", type: "asset", subtype: "current" },
+    { account: "Partner Salary", type: "expense", subtype: "operating" },
+    { account: "Interest on Capital", type: "expense", subtype: "operating" },
+    { account: "Payroll Expenses", type: "expense", subtype: "operating" },
+    { account: "Cash", type: "asset", subtype: "current" },
+    { account: "Accounts Payable", type: "liability", subtype: "current" },
+  ]),
+  manufacturing: createLedgerRows([
+    { account: "Raw Materials Opening Stock", type: "asset", subtype: "current" },
+    { account: "Purchases", type: "expense", subtype: "operating" },
+    { account: "Returns Outwards", type: "expense", subtype: "operating" },
+    { account: "Carriage Inwards", type: "expense", subtype: "operating" },
+    { account: "Closing Raw Materials", type: "asset", subtype: "current" },
+    { account: "Direct Labour", type: "expense", subtype: "operating" },
+    { account: "Factory Expenses", type: "expense", subtype: "operating" },
+    { account: "Opening Stock", type: "asset", subtype: "current" },
+    { account: "Sales Revenue", type: "revenue", subtype: "operating" },
+    { account: "Sales Returns", type: "expense", subtype: "operating" },
+    { account: "Closing Stock", type: "asset", subtype: "current" },
+    { account: "Payroll Expenses", type: "expense", subtype: "operating" },
+    { account: "Utilities Expense", type: "expense", subtype: "operating" },
+    { account: "Owner Capital", type: "capital", subtype: "equity" },
+    { account: "Cash", type: "asset", subtype: "current" },
+  ]),
+};
+
 const QUICK_ENTRY_TEMPLATES = [
   {
     id: "invoice-on-credit",
     label: "Invoice Customer (A/R)",
+    businessTypes: ["sole_proprietor", "partnership", "manufacturing"],
     entries: [
       { account: "Accounts Receivable", type: "asset", subtype: "current" },
       { account: "Sales Revenue", type: "revenue", subtype: "operating" },
@@ -134,6 +246,7 @@ const QUICK_ENTRY_TEMPLATES = [
   {
     id: "receive-from-customer",
     label: "Receive Payment (A/R)",
+    businessTypes: ["sole_proprietor", "partnership", "manufacturing"],
     entries: [
       { account: "Cash", type: "asset", subtype: "current" },
       { account: "Accounts Receivable", type: "asset", subtype: "current" },
@@ -142,6 +255,7 @@ const QUICK_ENTRY_TEMPLATES = [
   {
     id: "purchase-on-credit",
     label: "Purchase On Credit (A/P)",
+    businessTypes: ["sole_proprietor", "partnership", "manufacturing"],
     entries: [
       { account: "Purchases", type: "expense", subtype: "operating" },
       { account: "Accounts Payable", type: "liability", subtype: "current" },
@@ -150,8 +264,36 @@ const QUICK_ENTRY_TEMPLATES = [
   {
     id: "pay-supplier",
     label: "Pay Supplier (A/P)",
+    businessTypes: ["sole_proprietor", "partnership", "manufacturing"],
     entries: [
       { account: "Accounts Payable", type: "liability", subtype: "current" },
+      { account: "Cash", type: "asset", subtype: "current" },
+    ],
+  },
+  {
+    id: "factory-wages",
+    label: "Post Direct Labour",
+    businessTypes: ["manufacturing"],
+    entries: [
+      { account: "Direct Labour", type: "expense", subtype: "operating" },
+      { account: "Cash", type: "asset", subtype: "current" },
+    ],
+  },
+  {
+    id: "factory-overheads",
+    label: "Post Factory Overheads",
+    businessTypes: ["manufacturing"],
+    entries: [
+      { account: "Factory Overheads", type: "expense", subtype: "operating" },
+      { account: "Cash", type: "asset", subtype: "current" },
+    ],
+  },
+  {
+    id: "partner-drawing",
+    label: "Record Partner Drawing",
+    businessTypes: ["partnership"],
+    entries: [
+      { account: "Drawings", type: "drawings", subtype: "equity" },
       { account: "Cash", type: "asset", subtype: "current" },
     ],
   },
@@ -184,6 +326,43 @@ const INITIAL_BUDGET_TARGETS = {
   netCashFlow: 0,
 };
 
+const INITIAL_MANUFACTURING_INPUTS = {
+  openingRawMaterials: "",
+  purchases: "",
+  carriageInwards: "",
+  returnsOutwards: "",
+  closingRawMaterials: "",
+  directLabour: "",
+  factoryExpenses: "",
+};
+
+const INITIAL_PARTNERS = [
+  { id: 1, name: "Partner A", capital: "", share: "50", drawings: "", interestOnCapital: "", salary: "" },
+  { id: 2, name: "Partner B", capital: "", share: "50", drawings: "", interestOnCapital: "", salary: "" },
+];
+
+const getAccountGroupLabel = (row) => {
+  if (row.type === "asset") {
+    return row.subtype === "non-current" ? "Non-Current Assets" : "Current Assets";
+  }
+  if (row.type === "liability") {
+    return row.subtype === "non-current" ? "Non-Current Liabilities" : "Current Liabilities";
+  }
+  if (row.type === "expense") {
+    if (["Direct Labour", "Factory Expenses", "Factory Overheads", "Raw Materials Opening Stock", "Closing Raw Materials"].includes(row.account)) {
+      return "Manufacturing Costs";
+    }
+    return row.subtype === "other" ? "Other Expenses" : "Operating Expenses";
+  }
+  if (row.type === "revenue") {
+    return row.subtype === "other" ? "Other Income" : "Trading Revenue";
+  }
+  if (row.type === "capital" || row.type === "drawings") {
+    return "Equity";
+  }
+  return "Other";
+};
+
 export default function App() {
   const [token, setToken] = useState(() => readStoredToken());
   const [email, setEmail] = useState(() => readStoredEmail());
@@ -196,7 +375,13 @@ export default function App() {
   const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [showSignupPassword, setShowSignupPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
   const [themeMode, setThemeMode] = useState(() => readStoredTheme());
+  const [businessType, setBusinessType] = useState(() => readStoredBusinessType());
+  const [companies, setCompanies] = useState([]);
+  const [selectedCompanyId, setSelectedCompanyId] = useState("");
+  const [newCompanyName, setNewCompanyName] = useState("");
+  const [newCompanyType, setNewCompanyType] = useState("sole_proprietor");
 
   const [file, setFile] = useState(null);
   const [stats, setStats] = useState(null);
@@ -220,9 +405,27 @@ export default function App() {
   const [infoMessage, setInfoMessage] = useState("");
   const [ledgerRows, setLedgerRows] = useState(INITIAL_LEDGER_ROWS);
   const [budgetTargets, setBudgetTargets] = useState(INITIAL_BUDGET_TARGETS);
+  const [manufacturingInputs, setManufacturingInputs] = useState(INITIAL_MANUFACTURING_INPUTS);
+  const [partners, setPartners] = useState(INITIAL_PARTNERS);
   const [quickAmount, setQuickAmount] = useState("");
-  const [quickEntryId, setQuickEntryId] = useState(QUICK_ENTRY_TEMPLATES[0].id);
+  const [quickEntryId, setQuickEntryId] = useState("invoice-on-credit");
   const isDarkMode = themeMode === "dark";
+
+  const availableQuickEntries = useMemo(
+    () => QUICK_ENTRY_TEMPLATES.filter((template) => template.businessTypes.includes(businessType)),
+    [businessType],
+  );
+
+  const groupedLedgerRows = useMemo(() => {
+    return ledgerRows.reduce((groups, row) => {
+      const group = getAccountGroupLabel(row);
+      if (!groups[group]) {
+        groups[group] = [];
+      }
+      groups[group].push(row);
+      return groups;
+    }, {});
+  }, [ledgerRows]);
 
   const chartData = useMemo(() => {
     if (!stats) {
@@ -238,7 +441,6 @@ export default function App() {
   const statement = useMemo(() => {
     const totals = {
       revenue: 0,
-      expense: 0,
       assetsCurrent: 0,
       assetsNonCurrentGross: 0,
       nonCurrentAccumulatedDepreciation: 0,
@@ -258,7 +460,7 @@ export default function App() {
       if (row.type === "revenue") {
         totals.revenue += amount;
       } else if (row.type === "expense") {
-        totals.expense += amount;
+        continue;
       } else if (row.type === "asset") {
         if (row.subtype === "non-current") {
           const depreciation = Math.max(0, toAmount(row.depreciation));
@@ -282,20 +484,6 @@ export default function App() {
       }
     }
 
-    const profit = totals.revenue - totals.expense;
-    const equity = totals.capital + profit - totals.drawings;
-    const totalAssets = totals.assetsCurrent + totals.assetsNonCurrent;
-    const totalLiabilities = totals.liabilitiesCurrent + totals.liabilitiesNonCurrent;
-    const liabilitiesAndEquity = totalLiabilities + equity;
-
-    const operatingCashInflows = totals.revenue;
-    const operatingCashOutflows = totals.expense;
-    const netOperatingCashFlow = operatingCashInflows - operatingCashOutflows;
-    const investingCashOutflows = totals.assetsNonCurrent;
-    const financingInflows = totals.capital;
-    const financingOutflows = totals.drawings;
-    const netCashFlow = netOperatingCashFlow - investingCashOutflows + financingInflows - financingOutflows;
-
     const accountTotals = ledgerRows.reduce((acc, row) => {
       const key = (row.account || "").trim().toLowerCase();
       if (!key) {
@@ -308,12 +496,40 @@ export default function App() {
     const amountByAccount = (...names) =>
       names.reduce((sum, name) => sum + (accountTotals[name.toLowerCase()] || 0), 0);
 
-    const grossSales = amountByAccount("Gross Sales");
-    const goodsReturn = amountByAccount("Goods Return");
+    const grossSales = amountByAccount("Gross Sales", "Sales Revenue");
+    const openingStock = amountByAccount("Opening Stock");
+    const closingStock = amountByAccount("Closing Stock");
+    const purchases = amountByAccount("Purchases");
+    const returnsOutwards = amountByAccount("Returns Outwards");
+    const carriageInwardsLedger = amountByAccount("Carriage Inwards");
+    const salesReturns = amountByAccount("Sales Returns");
+    const goodsReturn = amountByAccount("Goods Return") + salesReturns;
     const discounts = amountByAccount("Discounts");
     const badDebts = amountByAccount("Bad Debts");
-    const cogs = amountByAccount("Cost of Goods Sold");
-    const incomeFromRevenue = grossSales - goodsReturn - discounts - badDebts - cogs;
+    const netSales = grossSales - goodsReturn - discounts;
+
+    const rawMaterialsOpening =
+      toAmount(manufacturingInputs.openingRawMaterials) ||
+      amountByAccount("Raw Materials Opening Stock", "Opening Raw Materials");
+    const rawMaterialsPurchases = toAmount(manufacturingInputs.purchases) || purchases;
+    const rawMaterialsCarriage = toAmount(manufacturingInputs.carriageInwards) || carriageInwardsLedger;
+    const rawMaterialsReturns = toAmount(manufacturingInputs.returnsOutwards) || returnsOutwards;
+    const rawMaterialsClosing =
+      toAmount(manufacturingInputs.closingRawMaterials) || amountByAccount("Closing Raw Materials");
+    const directLabour = toAmount(manufacturingInputs.directLabour) || amountByAccount("Direct Labour");
+    const factoryExpenses =
+      toAmount(manufacturingInputs.factoryExpenses) || amountByAccount("Factory Expenses", "Factory Overheads");
+    const rawMaterialsAvailable = rawMaterialsOpening + rawMaterialsPurchases + rawMaterialsCarriage - rawMaterialsReturns;
+    const rawMaterialsUsed = rawMaterialsAvailable - rawMaterialsClosing;
+    const costOfProduction = rawMaterialsUsed + directLabour + factoryExpenses;
+
+    const costOfGoodsAvailable =
+      openingStock +
+      (purchases - returnsOutwards + carriageInwardsLedger) +
+      (businessType === "manufacturing" ? costOfProduction : 0);
+    const cogs = costOfGoodsAvailable - closingStock;
+    const grossProfit = netSales - cogs;
+    const incomeFromRevenue = netSales - cogs;
 
     const interestReceived = amountByAccount("Interest Received");
     const rentalIncome = amountByAccount("Rental Income");
@@ -325,29 +541,34 @@ export default function App() {
     const advertisingExpenses = amountByAccount("Advertising Expenses");
     const marketingExpenses = amountByAccount("Marketing Expenses");
     const officeExpenses = amountByAccount("Office Expenses");
+    const rentExpense = amountByAccount("Rent Expense");
     const utilitiesExpense = amountByAccount("Utilities Expense");
     const licenseFees = amountByAccount("License Fees");
     const interestPaidOnLoans = amountByAccount("Interest Paid on Loans");
     const insurancePremiums = amountByAccount("Insurance Premiums");
     const otherMiscExpenses = amountByAccount("Other Miscellaneous Expenses");
+    const depreciation = amountByAccount("Depreciation Expense");
+    const lossOnSale = amountByAccount("Loss on Sale of Asset");
     const totalExpensesDetailed =
       payrollExpenses +
       advertisingExpenses +
       marketingExpenses +
       officeExpenses +
+      rentExpense +
       utilitiesExpense +
       licenseFees +
       interestPaidOnLoans +
       insurancePremiums +
-      otherMiscExpenses;
+      otherMiscExpenses +
+      depreciation +
+      lossOnSale +
+      badDebts;
 
-    const profitBeforeTax = grossIncome - totalExpensesDetailed;
+    const profitBeforeTax = grossProfit + incomeFromOtherSources - totalExpensesDetailed;
     const incomeTaxExpense = amountByAccount("Income Tax Expense");
     const netProfitAfterTax = profitBeforeTax - incomeTaxExpense;
 
-    const depreciation = amountByAccount("Depreciation Expense");
     const interestOnBorrowings = amountByAccount("Interest on Borrowings");
-    const lossOnSale = amountByAccount("Loss on Sale of Asset");
     const interestIncome = amountByAccount("Interest Received");
     const dividendIncome = amountByAccount("Dividend Income");
     const profitOnSale = amountByAccount("Profit on Sale of Asset");
@@ -374,9 +595,65 @@ export default function App() {
     const incomeTaxesPaid = amountByAccount("Income Taxes Paid");
     const netCashFromOperations = cashGeneratedFromOperations - incomeTaxesPaid;
 
+    const appropriationInterest = partners.reduce((sum, partner) => sum + toAmount(partner.interestOnCapital), 0);
+    const appropriationSalary = partners.reduce((sum, partner) => sum + toAmount(partner.salary), 0);
+    const appropriationBase = netProfitAfterTax - appropriationInterest - appropriationSalary;
+    const totalPartnerRatio = partners.reduce((sum, partner) => sum + Math.max(0, toAmount(partner.share)), 0) || 1;
+    const partnerAppropriation = partners.map((partner) => {
+      const ratio = Math.max(0, toAmount(partner.share));
+      const shareOfProfit = appropriationBase * (ratio / totalPartnerRatio);
+      const closingCapital =
+        toAmount(partner.capital) +
+        toAmount(partner.interestOnCapital) +
+        toAmount(partner.salary) +
+        shareOfProfit -
+        toAmount(partner.drawings);
+      return {
+        ...partner,
+        shareOfProfit,
+        closingCapital,
+      };
+    });
+
+    const partnershipCapital = partnerAppropriation.reduce((sum, partner) => sum + partner.closingCapital, 0);
+    const equity =
+      businessType === "partnership" ? partnershipCapital : totals.capital + netProfitAfterTax - totals.drawings;
+    const totalAssets = totals.assetsCurrent + totals.assetsNonCurrent;
+    const totalLiabilities = totals.liabilitiesCurrent + totals.liabilitiesNonCurrent;
+    const liabilitiesAndEquity = totalLiabilities + equity;
+    const operatingCashInflows = netSales + incomeFromOtherSources;
+    const operatingCashOutflows = totalExpensesDetailed + incomeTaxExpense;
+    const netOperatingCashFlow = operatingCashInflows - operatingCashOutflows;
+    const investingCashOutflows = totals.assetsNonCurrent;
+    const financingInflows = businessType === "partnership" ? partnershipCapital : totals.capital;
+    const financingOutflows =
+      businessType === "partnership"
+        ? partners.reduce((sum, partner) => sum + toAmount(partner.drawings), 0)
+        : totals.drawings;
+    const netCashFlow = netOperatingCashFlow - investingCashOutflows + financingInflows - financingOutflows;
+
     return {
       ...totals,
-      profit,
+      businessType,
+      openingStock,
+      closingStock,
+      purchases,
+      returnsOutwards,
+      carriageInwards: carriageInwardsLedger,
+      netSales,
+      incomeFromRevenue,
+      rawMaterialsOpening,
+      rawMaterialsPurchases,
+      rawMaterialsCarriage,
+      rawMaterialsReturns,
+      rawMaterialsClosing,
+      rawMaterialsAvailable,
+      rawMaterialsUsed,
+      directLabour,
+      factoryExpenses,
+      costOfProduction,
+      costOfGoodsAvailable,
+      grossProfit,
       equity,
       totalAssets,
       totalLiabilities,
@@ -394,7 +671,6 @@ export default function App() {
       discounts,
       badDebts,
       cogs,
-      incomeFromRevenue,
       interestReceived,
       rentalIncome,
       miscIncome,
@@ -404,6 +680,7 @@ export default function App() {
       advertisingExpenses,
       marketingExpenses,
       officeExpenses,
+      rentExpense,
       utilitiesExpense,
       licenseFees,
       interestPaidOnLoans,
@@ -428,13 +705,25 @@ export default function App() {
       cashGeneratedFromOperations,
       incomeTaxesPaid,
       netCashFromOperations,
+      appropriationInterest,
+      appropriationSalary,
+      appropriationBase,
+      partnerAppropriation,
     };
-  }, [ledgerRows]);
+  }, [ledgerRows, businessType, manufacturingInputs, partners]);
 
   const statementGraphData = useMemo(
     () => [
-      { name: "Revenue", actual: statement.revenue, budget: toAmount(budgetTargets.revenue) },
-      { name: "Expenses", actual: statement.totalExpensesDetailed || statement.expense, budget: toAmount(budgetTargets.expense) },
+      {
+        name: businessType === "manufacturing" ? "Cost of Production" : "Gross Profit",
+        actual: businessType === "manufacturing" ? statement.costOfProduction : statement.grossProfit,
+        budget: toAmount(budgetTargets.revenue),
+      },
+      {
+        name: "Net Profit",
+        actual: statement.netProfitAfterTax,
+        budget: toAmount(budgetTargets.expense),
+      },
       { name: "Assets", actual: statement.totalAssets, budget: toAmount(budgetTargets.totalAssets) },
       { name: "Liabilities", actual: statement.totalLiabilities, budget: toAmount(budgetTargets.totalLiabilities) },
       { name: "Equity", actual: statement.equity, budget: toAmount(budgetTargets.equity) },
@@ -488,8 +777,10 @@ export default function App() {
       }
 
       setToken(data.token);
-      persistToken(data.token);
-      persistEmail(email);
+      if (rememberMe) {
+        persistToken(data.token);
+        persistEmail(email);
+      }
       setInfoMessage("Signed in successfully.");
     } catch (error) {
       setErrorMessage(error.message || "Login failed");
@@ -534,6 +825,7 @@ export default function App() {
         throw new Error(data.error || "Registration failed");
       }
 
+      persistEmail(registerEmail);
       setEmail(registerEmail);
       setPassword(registerPassword);
       setOrg("");
@@ -574,7 +866,8 @@ export default function App() {
   };
 
   const loadDashboardStats = async () => {
-    const data = await authorizedFetch("/dashboard");
+    const path = selectedCompanyId ? `/dashboard?company_id=${selectedCompanyId}` : "/dashboard";
+    const data = await authorizedFetch(path);
     setDashboardStats(data);
   };
 
@@ -582,6 +875,21 @@ export default function App() {
     const data = await authorizedFetch("/me");
     setCurrentUser(data);
     return data;
+  };
+
+  const loadCompanies = async (defaultCompanyId) => {
+    const items = await authorizedFetch("/companies");
+    const normalizedCompanies = Array.isArray(items) ? items : [];
+    setCompanies(normalizedCompanies);
+
+    const fallbackCompany =
+      normalizedCompanies.find((company) => String(company.id) === String(defaultCompanyId)) ||
+      normalizedCompanies[0];
+
+    if (fallbackCompany) {
+      setSelectedCompanyId(String(fallbackCompany.id));
+      setBusinessType(fallbackCompany.business_type || "sole_proprietor");
+    }
   };
 
   const loadSystemStatus = async () => {
@@ -662,6 +970,9 @@ export default function App() {
     try {
       const form = new FormData();
       form.append("file", file);
+      if (selectedCompanyId) {
+        form.append("company_id", selectedCompanyId);
+      }
 
       await authorizedFetch("/analyze", {
         method: "POST",
@@ -687,7 +998,7 @@ export default function App() {
     }
 
     if (!file) {
-      setErrorMessage("Upload a file first (CSV, XLS/XLSX, TXT, or JSON).");
+      setErrorMessage("Upload a file first (CSV, XLS/XLSX, TXT, JSON, PDF, or Word).");
       return;
     }
 
@@ -771,6 +1082,36 @@ export default function App() {
     setThemeMode((current) => (current === "dark" ? "light" : "dark"));
   };
 
+  const applyBusinessTemplate = () => {
+    setLedgerRows(BUSINESS_TEMPLATE_ROWS[businessType].map((row) => ({ ...row })));
+    setInfoMessage("Business-specific input template loaded.");
+    setErrorMessage("");
+  };
+
+  const updateManufacturingInput = (key, value) => {
+    setManufacturingInputs((current) => ({ ...current, [key]: value }));
+  };
+
+  const updatePartner = (partnerId, key, value) => {
+    setPartners((items) =>
+      items.map((partner) => (partner.id === partnerId ? { ...partner, [key]: value } : partner)),
+    );
+  };
+
+  const addPartner = () => {
+    setPartners((items) => {
+      const nextId = items.length ? Math.max(...items.map((partner) => partner.id)) + 1 : 1;
+      return [
+        ...items,
+        { id: nextId, name: `Partner ${String.fromCharCode(64 + nextId)}`, capital: "", share: "", drawings: "", interestOnCapital: "", salary: "" },
+      ];
+    });
+  };
+
+  const removePartner = (partnerId) => {
+    setPartners((items) => items.filter((partner) => partner.id !== partnerId));
+  };
+
   const updateLedgerRow = (rowId, key, value) => {
     setLedgerRows((rows) =>
       rows.map((row) => {
@@ -851,6 +1192,34 @@ export default function App() {
     setBudgetTargets((current) => ({ ...current, [key]: value }));
   };
 
+  const createCompany = async () => {
+    setErrorMessage("");
+    setInfoMessage("");
+
+    if (!newCompanyName.trim()) {
+      setErrorMessage("Company name is required.");
+      return;
+    }
+
+    try {
+      const company = await authorizedFetch("/companies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newCompanyName.trim(),
+          business_type: newCompanyType,
+        }),
+      });
+      setNewCompanyName("");
+      setSelectedCompanyId(String(company.id));
+      setBusinessType(company.business_type);
+      await loadCompanies(company.id);
+      setInfoMessage("Company created.");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to create company.");
+    }
+  };
+
   const createAdminUser = async () => {
     setErrorMessage("");
     setInfoMessage("");
@@ -927,6 +1296,16 @@ export default function App() {
     persistTheme(themeMode);
   }, [themeMode]);
 
+  useEffect(() => {
+    persistBusinessType(businessType);
+  }, [businessType]);
+
+  useEffect(() => {
+    if (!availableQuickEntries.some((template) => template.id === quickEntryId)) {
+      setQuickEntryId(availableQuickEntries[0]?.id || "");
+    }
+  }, [availableQuickEntries, quickEntryId]);
+
   const themedStyles = useMemo(() => {
     if (!isDarkMode) {
       return styles;
@@ -989,6 +1368,7 @@ export default function App() {
     const bootstrap = async () => {
       try {
         const me = await loadCurrentUser();
+        await loadCompanies(me?.default_company_id);
         await Promise.all([
           loadStats(),
           loadDashboardStats(),
@@ -1023,6 +1403,20 @@ export default function App() {
     };
   }, [token]);
 
+  useEffect(() => {
+    if (!selectedCompanyId || !companies.length) {
+      return;
+    }
+
+    const selectedCompany = companies.find((company) => String(company.id) === String(selectedCompanyId));
+    if (!selectedCompany) {
+      return;
+    }
+
+    setBusinessType(selectedCompany.business_type || "sole_proprietor");
+    loadDashboardStats();
+  }, [selectedCompanyId, companies]);
+
   if (!token) {
     return (
       <div style={themedStyles.center}>
@@ -1056,13 +1450,23 @@ export default function App() {
                   {showLoginPassword ? "Hide" : "Show"}
                 </button>
               </div>
-              <button
-                type="button"
-                style={themedStyles.linkButton}
-                onClick={() => setInfoMessage("Password reset flow can be added next.")}
-              >
-                Forgot password?
-              </button>
+              <div style={themedStyles.authOptions}>
+                <label style={themedStyles.rememberWrap}>
+                  <input
+                    type="checkbox"
+                    checked={rememberMe}
+                    onChange={(event) => setRememberMe(event.target.checked)}
+                  />
+                  <span>Remember me</span>
+                </label>
+                <button
+                  type="button"
+                  style={themedStyles.linkButton}
+                  onClick={() => setInfoMessage("Password reset flow can be added next.")}
+                >
+                  Forgot Password?
+                </button>
+              </div>
               <button onClick={login} style={themedStyles.authPrimaryButton} disabled={authLoading}>
                 {authLoading ? "Signing in..." : "Login"}
               </button>
@@ -1292,9 +1696,73 @@ export default function App() {
         ) : null}
 
         <div style={themedStyles.card}>
+          <h3>Company Setup</h3>
+          <div style={themedStyles.quickEntryGrid}>
+            <label style={themedStyles.budgetField}>
+              Active Company
+              <select
+                value={selectedCompanyId}
+                onChange={(event) => setSelectedCompanyId(event.target.value)}
+                style={themedStyles.tableInput}
+              >
+                {companies.map((company) => (
+                  <option key={company.id} value={company.id}>
+                    {company.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label style={themedStyles.budgetField}>
+              Business Type
+              <select
+                value={businessType}
+                onChange={(event) => setBusinessType(event.target.value)}
+                style={themedStyles.tableInput}
+              >
+                {BUSINESS_TYPE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button onClick={applyBusinessTemplate} style={themedStyles.button}>
+              Load Inputs
+            </button>
+          </div>
+          <p style={themedStyles.graphNote}>
+            {BUSINESS_TYPE_OPTIONS.find((option) => option.value === businessType)?.description}
+          </p>
+          {(currentUser?.role === "owner" || currentUser?.role === "admin") ? (
+            <div style={themedStyles.adminCreateGrid}>
+              <input
+                placeholder="New company name"
+                value={newCompanyName}
+                onChange={(event) => setNewCompanyName(event.target.value)}
+                style={themedStyles.tableInput}
+              />
+              <select
+                value={newCompanyType}
+                onChange={(event) => setNewCompanyType(event.target.value)}
+                style={themedStyles.tableInput}
+              >
+                {BUSINESS_TYPE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <button onClick={createCompany} style={themedStyles.button}>
+                Create Company
+              </button>
+            </div>
+          ) : null}
+        </div>
+
+        <div style={themedStyles.card}>
           <input
             type="file"
-            accept=".csv,.txt,.json,.xls,.xlsx"
+            accept=".csv,.txt,.json,.xls,.xlsx,.pdf,.doc,.docx"
             onChange={(event) => setFile(event.target.files?.[0] || null)}
           />
           <p style={themedStyles.graphNote}>Upload external files for analytics or ledger calculations.</p>
@@ -1343,7 +1811,7 @@ export default function App() {
               onChange={(event) => setQuickEntryId(event.target.value)}
               style={themedStyles.tableInput}
             >
-              {QUICK_ENTRY_TEMPLATES.map((template) => (
+              {availableQuickEntries.map((template) => (
                 <option key={template.id} value={template.id}>{template.label}</option>
               ))}
             </select>
@@ -1453,6 +1921,49 @@ export default function App() {
             </datalist>
           </div>
         </div>
+
+        <div style={themedStyles.card}>
+          <h3>Grouped Accounts</h3>
+          <div style={themedStyles.kpiGrid}>
+            {Object.entries(groupedLedgerRows).map(([group, items]) => (
+              <div key={group} style={themedStyles.kpiItem}>
+                <strong>{group}</strong>
+                <div>{items.length} account(s)</div>
+                <div>{formatMoney(items.reduce((sum, row) => sum + toAmount(row.amount), 0))}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {businessType === "manufacturing" ? (
+          <div style={themedStyles.card}>
+            <h3>Manufacturing Account</h3>
+            <p>Opening Raw Materials: {formatMoney(statement.rawMaterialsOpening)}</p>
+            <p>Purchases: {formatMoney(statement.rawMaterialsPurchases)}</p>
+            <p>Carriage Inwards: {formatMoney(statement.rawMaterialsCarriage)}</p>
+            <p>Returns Outwards: {formatMoney(statement.rawMaterialsReturns)}</p>
+            <p>Closing Raw Materials: {formatMoney(statement.rawMaterialsClosing)}</p>
+            <p>Raw Materials Used: {formatMoney(statement.rawMaterialsUsed)}</p>
+            <p>Direct Labour: {formatMoney(statement.directLabour)}</p>
+            <p>Factory Expenses: {formatMoney(statement.factoryExpenses)}</p>
+            <p style={themedStyles.totalLine}>Cost of Production: {formatMoney(statement.costOfProduction)}</p>
+          </div>
+        ) : null}
+
+        {businessType === "partnership" ? (
+          <div style={themedStyles.card}>
+            <h3>Profit and Loss Appropriation</h3>
+            <p>Net Profit: {formatMoney(statement.netProfitAfterTax)}</p>
+            <p>Interest on Capital: {formatMoney(statement.appropriationInterest)}</p>
+            <p>Partner Salaries: {formatMoney(statement.appropriationSalary)}</p>
+            <p style={themedStyles.totalLine}>Profit Available for Sharing: {formatMoney(statement.appropriationBase)}</p>
+            {statement.partnerAppropriation.map((partner) => (
+              <p key={partner.id}>
+                {partner.name}: {formatMoney(partner.shareOfProfit)}
+              </p>
+            ))}
+          </div>
+        ) : null}
 
         <div style={themedStyles.card}>
           <h3>Profit and Loss Statement</h3>
@@ -1627,47 +2138,49 @@ const styles = {
     justifyContent: "center",
     alignItems: "center",
     padding: 20,
-    background: "#f2f3f5",
+    background: "linear-gradient(135deg, #c59ad9 0%, #9ad3d6 100%)",
   },
   authSingleCard: {
     width: "100%",
-    maxWidth: 360,
-    background: "#ffffff",
-    borderRadius: 10,
-    padding: 18,
-    boxShadow: "0 8px 22px rgba(18, 40, 64, 0.14)",
-    border: "1px solid #e4e9f1",
+    maxWidth: 380,
+    background: "rgba(255, 255, 255, 0.08)",
+    borderRadius: 24,
+    padding: 36,
+    boxShadow: "0 22px 60px rgba(33, 43, 74, 0.18)",
+    border: "1px solid rgba(255, 255, 255, 0.18)",
+    backdropFilter: "blur(12px)",
   },
   authTitle: {
     marginTop: 2,
-    marginBottom: 16,
+    marginBottom: 24,
     textAlign: "center",
-    color: "#1b2c42",
-    fontSize: 34,
-    fontWeight: 700,
-    letterSpacing: 0.3,
+    color: "#ffffff",
+    fontSize: 36,
+    fontWeight: 300,
+    letterSpacing: 0.6,
   },
   authInput: {
     display: "block",
-    marginBottom: 12,
-    padding: "12px 14px",
+    marginBottom: 18,
+    padding: "12px 0",
     width: "100%",
-    borderRadius: 6,
-    border: "1px solid #d6dce5",
-    background: "#ffffff",
-    color: "#1b2c42",
-    fontSize: 15,
+    borderRadius: 0,
+    border: "none",
+    borderBottom: "2px solid rgba(255, 255, 255, 0.88)",
+    background: "transparent",
+    color: "#ffffff",
+    fontSize: 16,
   },
   passwordWrap: {
     position: "relative",
   },
   eyeToggle: {
     position: "absolute",
-    right: 10,
+    right: 0,
     top: 10,
     border: "none",
     background: "transparent",
-    color: "#7a8798",
+    color: "rgba(255, 255, 255, 0.8)",
     fontSize: 12,
     cursor: "pointer",
     padding: 2,
@@ -1675,28 +2188,28 @@ const styles = {
   linkButton: {
     border: "none",
     background: "transparent",
-    color: "#2476d2",
-    fontWeight: 600,
-    fontSize: 14,
+    color: "#ffffff",
+    fontWeight: 500,
+    fontSize: 12,
     cursor: "pointer",
-    display: "block",
-    margin: "0 auto 10px auto",
+    padding: 0,
   },
   authPrimaryButton: {
     width: "100%",
     border: "none",
     borderRadius: 6,
-    background: "#1171c7",
+    background: "#3c5a80",
     color: "#ffffff",
     fontWeight: 700,
-    padding: "11px 14px",
+    padding: "12px 14px",
     cursor: "pointer",
-    marginTop: 4,
+    marginTop: 8,
+    letterSpacing: 1,
   },
   authSwitchText: {
     margin: "12px 0 2px 0",
     textAlign: "center",
-    color: "#6b7380",
+    color: "#ffffff",
     fontSize: 14,
   },
   authDivider: {
@@ -1710,22 +2223,38 @@ const styles = {
   inlineLink: {
     border: "none",
     background: "transparent",
-    color: "#2476d2",
+    color: "#ffffff",
     cursor: "pointer",
     padding: 0,
     fontWeight: 600,
     fontSize: 14,
+    textDecoration: "underline",
   },
   themeToggle: {
     width: "100%",
-    border: "1px solid #bfd7f1",
+    border: "1px solid rgba(255,255,255,0.45)",
     borderRadius: 6,
     background: "transparent",
-    color: "#1b2c42",
+    color: "#ffffff",
     fontWeight: 600,
     padding: "8px 10px",
-    marginBottom: 12,
+    marginBottom: 18,
     cursor: "pointer",
+  },
+  authOptions: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    marginBottom: 22,
+    color: "#ffffff",
+    fontSize: 12,
+  },
+  rememberWrap: {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    color: "#ffffff",
   },
   layout: {
     display: "flex",
