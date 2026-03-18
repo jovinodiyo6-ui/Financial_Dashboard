@@ -11,11 +11,15 @@ import hashlib
 import datetime
 import json
 import os
+import secrets
+import base64
+import smtplib
 import pandas as pd
 import re
 import urllib.request
 import urllib.error
 from dotenv import load_dotenv
+from email.message import EmailMessage
 from io import StringIO
 
 try:
@@ -36,6 +40,17 @@ except Exception:  # pragma: no cover - runtime fallback for missing optional de
 
     def get_remote_address():
         return "0.0.0.0"
+
+try:
+    import stripe
+except Exception:  # pragma: no cover - optional dependency
+    stripe = None
+
+try:
+    from celery import Celery, Task
+except Exception:  # pragma: no cover - optional dependency
+    Celery = None
+    Task = object
 
 load_dotenv()
 
@@ -104,12 +119,62 @@ else:
 
     limiter = _NoopLimiter()
 
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "").strip()
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
+STRIPE_PRICE_IDS = {
+    "pro": os.getenv("STRIPE_PRICE_PRO", "").strip(),
+    "ai": os.getenv("STRIPE_PRICE_AI", "").strip(),
+}
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+ASYNC_JOB_MODE = os.getenv("ASYNC_JOB_MODE", "inline" if ENV != "production" else "celery").strip().lower()
+MPESA_ENV = os.getenv("MPESA_ENV", "sandbox").strip().lower()
+MPESA_CONSUMER_KEY = os.getenv("MPESA_CONSUMER_KEY", "").strip()
+MPESA_CONSUMER_SECRET = os.getenv("MPESA_CONSUMER_SECRET", "").strip()
+MPESA_SHORTCODE = os.getenv("MPESA_SHORTCODE", "").strip()
+MPESA_PASSKEY = os.getenv("MPESA_PASSKEY", "").strip()
+MPESA_CALLBACK_URL = os.getenv("MPESA_CALLBACK_URL", "").strip()
+MPESA_INITIATOR_NAME = os.getenv("MPESA_INITIATOR_NAME", "").strip()
+MPESA_SECURITY_CREDENTIAL = os.getenv("MPESA_SECURITY_CREDENTIAL", "").strip()
+MPESA_BASE_URL = "https://api.safaricom.co.ke" if MPESA_ENV == "production" else "https://sandbox.safaricom.co.ke"
+
+if stripe and STRIPE_SECRET_KEY:
+    stripe.api_key = STRIPE_SECRET_KEY
+
+celery_app = None
+if Celery:
+    class FlaskTask(Task):
+        def __call__(self, *args, **kwargs):
+            with app.app_context():
+                return self.run(*args, **kwargs)
+
+    celery_app = Celery(
+        app.import_name,
+        broker=os.getenv("CELERY_BROKER_URL", REDIS_URL),
+        backend=os.getenv("CELERY_RESULT_BACKEND", REDIS_URL),
+        task_cls=FlaskTask,
+    )
+    celery_app.conf.update(
+        task_serializer="json",
+        accept_content=["json"],
+        result_serializer="json",
+        timezone="UTC",
+        enable_utc=True,
+    )
+
 # ---------------- DATABASE ----------------
 
 class Organization(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
     usage = db.Column(db.Integer, default=0)
+    billing_email = db.Column(db.String(120), nullable=True)
+    plan_code = db.Column(db.String(20), nullable=False, default="free")
+    subscription_status = db.Column(db.String(20), nullable=False, default="free")
+    stripe_customer_id = db.Column(db.String(120), nullable=True)
+    stripe_subscription_id = db.Column(db.String(120), nullable=True)
+    max_companies = db.Column(db.Integer, nullable=False, default=1)
+    ai_assistant_enabled = db.Column(db.Boolean, nullable=False, default=False)
+    subscription_updated_at = db.Column(db.DateTime(timezone=True), nullable=True)
 
 
 class User(db.Model):
@@ -118,6 +183,7 @@ class User(db.Model):
     password = db.Column(db.String(200), nullable=False)
     role = db.Column(db.String(20), nullable=False)
     org_id = db.Column(db.Integer, nullable=False)
+    default_company_id = db.Column(db.Integer, nullable=True)
 
 
 class Report(db.Model):
@@ -132,6 +198,21 @@ class Company(db.Model):
     org_id = db.Column(db.Integer, nullable=False)
     name = db.Column(db.String(120), nullable=False)
     business_type = db.Column(db.String(50), nullable=False, default="sole_proprietor")
+
+
+class UserCompanyMembership(db.Model):
+    __table_args__ = (db.UniqueConstraint("user_id", "company_id", name="uq_user_company_membership"),)
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    role = db.Column(db.String(20), nullable=False, default="member")
+    is_default = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
 
 
 class CompanyPartner(db.Model):
@@ -157,6 +238,7 @@ class APIKey(db.Model):
 class AuditLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=True)
     action = db.Column(db.String(200), nullable=False)
     time = db.Column(
         db.DateTime(timezone=True),
@@ -170,6 +252,68 @@ class ActiveSession(db.Model):
     last_seen = db.Column(
         db.DateTime(timezone=True),
         default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class PasswordResetToken(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, nullable=False)
+    token_hash = db.Column(db.String(64), unique=True, nullable=False)
+    expires_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    used_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class BackgroundJob(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    requested_by = db.Column(db.Integer, nullable=False)
+    job_type = db.Column(db.String(40), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default="queued")
+    provider = db.Column(db.String(20), nullable=False, default="inline")
+    payload_json = db.Column(db.Text, nullable=True)
+    result_json = db.Column(db.Text, nullable=True)
+    error_message = db.Column(db.Text, nullable=True)
+    started_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    completed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class BillingPaymentRequest(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    requested_by = db.Column(db.Integer, nullable=False)
+    provider = db.Column(db.String(20), nullable=False, default="mpesa")
+    plan_code = db.Column(db.String(20), nullable=False)
+    currency_code = db.Column(db.String(8), nullable=False, default="KES")
+    amount = db.Column(db.Float, nullable=False, default=0.0)
+    phone_number = db.Column(db.String(30), nullable=True)
+    external_reference = db.Column(db.String(120), nullable=True)
+    merchant_request_id = db.Column(db.String(120), nullable=True)
+    checkout_request_id = db.Column(db.String(120), nullable=True)
+    status = db.Column(db.String(20), nullable=False, default="pending")
+    provider_response_json = db.Column(db.Text, nullable=True)
+    callback_payload_json = db.Column(db.Text, nullable=True)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+    updated_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        onupdate=lambda: datetime.datetime.now(datetime.UTC),
         nullable=False,
     )
 
@@ -779,19 +923,61 @@ with app.app_context():
         try:
             db.create_all()
             inspector = db.inspect(db.engine)
-            report_columns = {column["name"] for column in inspector.get_columns("report")}
-            if "company_id" not in report_columns:
-                db.session.execute(text("ALTER TABLE report ADD COLUMN company_id INTEGER"))
-                db.session.commit()
+
+            def ensure_column(table_name, column_name, column_sql):
+                existing_columns = {column["name"] for column in inspector.get_columns(table_name)}
+                if column_name not in existing_columns:
+                    db.session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_sql}"))
+                    db.session.commit()
+
+            ensure_column("report", "company_id", "company_id INTEGER")
+            ensure_column("organization", "billing_email", "billing_email VARCHAR(120)")
+            ensure_column("organization", "plan_code", "plan_code VARCHAR(20) DEFAULT 'free'")
+            ensure_column("organization", "subscription_status", "subscription_status VARCHAR(20) DEFAULT 'free'")
+            ensure_column("organization", "stripe_customer_id", "stripe_customer_id VARCHAR(120)")
+            ensure_column("organization", "stripe_subscription_id", "stripe_subscription_id VARCHAR(120)")
+            ensure_column("organization", "max_companies", "max_companies INTEGER DEFAULT 1")
+            ensure_column("organization", "ai_assistant_enabled", "ai_assistant_enabled BOOLEAN DEFAULT 0")
+            ensure_column("organization", "subscription_updated_at", "subscription_updated_at DATETIME")
+            ensure_column("user", "default_company_id", "default_company_id INTEGER")
+            ensure_column("audit_log", "company_id", "company_id INTEGER")
         except OperationalError as exc:
             if "already exists" not in str(exc).lower():
                 raise
+
+
+def run_schema_compatibility_sync():
+    try:
+        db.create_all()
+        inspector = db.inspect(db.engine)
+
+        def ensure_column(table_name, column_name, column_sql):
+            existing_columns = {column["name"] for column in inspector.get_columns(table_name)}
+            if column_name not in existing_columns:
+                db.session.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_sql}"))
+                db.session.commit()
+
+        ensure_column("report", "company_id", "company_id INTEGER")
+        ensure_column("organization", "billing_email", "billing_email VARCHAR(120)")
+        ensure_column("organization", "plan_code", "plan_code VARCHAR(20) DEFAULT 'free'")
+        ensure_column("organization", "subscription_status", "subscription_status VARCHAR(20) DEFAULT 'free'")
+        ensure_column("organization", "stripe_customer_id", "stripe_customer_id VARCHAR(120)")
+        ensure_column("organization", "stripe_subscription_id", "stripe_subscription_id VARCHAR(120)")
+        ensure_column("organization", "max_companies", "max_companies INTEGER DEFAULT 1")
+        ensure_column("organization", "ai_assistant_enabled", "ai_assistant_enabled BOOLEAN DEFAULT 0")
+        ensure_column("organization", "subscription_updated_at", "subscription_updated_at DATETIME")
+        ensure_column("user", "default_company_id", "default_company_id INTEGER")
+        ensure_column("audit_log", "company_id", "company_id INTEGER")
+    except OperationalError as exc:
+        if "already exists" not in str(exc).lower():
+            raise
 
 # ---------------- LIMITS ----------------
 
 FREE_USAGE_LIMIT = 5
 MAINTENANCE_DEFAULT_MESSAGE = "[System Under Maintainance]"
 VALID_ROLES = {"owner", "admin", "accountant", "manager", "cashier", "member"}
+VALID_MEMBERSHIP_ROLES = set(VALID_ROLES)
 INVOICE_OPEN_STATUSES = {"draft", "sent", "partial", "overdue"}
 BILL_OPEN_STATUSES = {"draft", "approved", "partial", "overdue"}
 INVOICE_SETTLED_STATUSES = {"paid", "cancelled"}
@@ -805,6 +991,49 @@ VALID_TAX_FILING_TYPES = {"indirect_tax", "income_tax", "payroll_tax"}
 VALID_PAY_TYPES = {"hourly", "salary"}
 VALID_INTEGRATION_STATUSES = {"available", "connected", "attention"}
 VALID_BUSINESS_TYPES = {"sole_proprietor", "partnership", "manufacturing"}
+PASSWORD_RESET_EXPIRY_MINUTES = int(os.getenv("PASSWORD_RESET_EXPIRY_MINUTES", "30"))
+JOB_TYPES = {"finance_digest", "tax_filing_package", "accountant_brief"}
+JOB_TERMINAL_STATUSES = {"completed", "failed"}
+ROLE_PERMISSION_MAP = {
+    "owner": {"company:view", "company:manage", "user:manage", "billing:manage", "finance:manage", "jobs:run", "ai:ask"},
+    "admin": {"company:view", "company:manage", "user:manage", "billing:manage", "finance:manage", "jobs:run", "ai:ask"},
+    "accountant": {"company:view", "finance:manage", "jobs:run", "ai:ask"},
+    "manager": {"company:view", "finance:manage", "jobs:run", "ai:ask"},
+    "cashier": {"company:view", "finance:manage"},
+    "member": {"company:view"},
+}
+PLAN_DEFINITIONS = {
+    "free": {
+        "code": "free",
+        "label": "Starter",
+        "price_monthly": 0,
+        "local_price_kes": 0,
+        "summary": "For students, freelancers, and first-time founders building habits before they need advanced finance operations.",
+        "max_companies": 1,
+        "ai_enabled": False,
+        "features": ["1 company", "core accounting", "manual imports"],
+    },
+    "pro": {
+        "code": "pro",
+        "label": "Pro",
+        "price_monthly": 20,
+        "local_price_kes": 900,
+        "summary": "For serious small businesses that need workflow automation, exports, bank feeds, and deeper operating control.",
+        "max_companies": 5,
+        "ai_enabled": False,
+        "features": ["5 companies", "team workflows", "automations", "async jobs"],
+    },
+    "ai": {
+        "code": "ai",
+        "label": "AI CFO",
+        "price_monthly": 50,
+        "local_price_kes": 1500,
+        "summary": "For owners who want proactive alerts, cash forecasting, and an always-available finance copilot.",
+        "max_companies": 25,
+        "ai_enabled": True,
+        "features": ["25 companies", "AI CFO chat", "proactive alerts", "scenario forecasting"],
+    },
+}
 INTEGRATION_CATALOG = [
     {"provider": "plaid", "category": "banking", "description": "Direct bank feeds and transaction sync."},
     {"provider": "stripe", "category": "payments", "description": "Card payments and customer collections."},
@@ -906,6 +1135,41 @@ def safe_commit():
         return False
 
 
+def get_plan_definition(plan_code=None):
+    normalized_code = str(plan_code or "free").strip().lower()
+    return PLAN_DEFINITIONS.get(normalized_code, PLAN_DEFINITIONS["free"])
+
+
+def apply_subscription_plan(org, plan_code, status=None, stripe_customer_id=None, stripe_subscription_id=None):
+    plan = get_plan_definition(plan_code)
+    org.plan_code = plan["code"]
+    org.max_companies = int(plan["max_companies"])
+    org.ai_assistant_enabled = bool(plan["ai_enabled"])
+    org.subscription_status = (status or ("free" if plan["code"] == "free" else "active")).strip().lower()
+    if stripe_customer_id:
+        org.stripe_customer_id = stripe_customer_id
+    if stripe_subscription_id is not None:
+        org.stripe_subscription_id = stripe_subscription_id or None
+    org.subscription_updated_at = datetime.datetime.now(datetime.UTC)
+    return plan
+
+
+def serialize_subscription(org):
+    plan = get_plan_definition(org.plan_code)
+    return {
+        "plan_code": plan["code"],
+        "plan_label": plan["label"],
+        "price_monthly": plan["price_monthly"],
+        "max_companies": int(org.max_companies or plan["max_companies"]),
+        "subscription_status": org.subscription_status or ("free" if plan["code"] == "free" else "active"),
+        "ai_enabled": bool(org.ai_assistant_enabled),
+        "billing_email": org.billing_email or "",
+        "stripe_customer_id": org.stripe_customer_id or "",
+        "stripe_configured": bool(stripe and STRIPE_SECRET_KEY),
+        "features": plan["features"],
+    }
+
+
 def get_user_from_token():
     try:
         user_id = int(get_jwt_identity())
@@ -915,12 +1179,16 @@ def get_user_from_token():
 
 
 def build_access_token(user):
+    org = db.session.get(Organization, user.org_id) if user.org_id else None
+    subscription = serialize_subscription(org) if org else serialize_subscription(Organization(name="", usage=0))
     return create_access_token(
         identity=str(user.id),
         additional_claims={
             "email": user.email,
             "org_id": user.org_id,
             "role": user.role,
+            "default_company_id": user.default_company_id,
+            "plan_code": subscription["plan_code"],
         },
     )
 
@@ -943,14 +1211,512 @@ def roles_required(*allowed_roles):
     return decorator
 
 
-def log(user_id, action):
-    db.session.add(AuditLog(user_id=user_id, action=action))
+def plan_required(minimum_plan):
+    def decorator(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            user = get_user_from_token()
+            if not user:
+                return error_response("invalid token", 401)
+            denial = ensure_plan_access(user, minimum_plan)
+            if denial:
+                return denial
+            return fn(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+def log(user_id, action, company_id=None):
+    db.session.add(AuditLog(user_id=user_id, company_id=company_id, action=action))
     # Avoid crashing request flow because of non-critical audit logging issues.
     safe_commit()
 
 
+def normalize_company_ids(raw_value):
+    if raw_value is None:
+        return []
+    if isinstance(raw_value, str) and raw_value.strip() == "":
+        return []
+
+    raw_items = raw_value if isinstance(raw_value, list) else [raw_value]
+    company_ids = []
+    seen = set()
+    for entry in raw_items:
+        company_id = parse_company_id(entry)
+        if company_id is None or company_id in seen:
+            continue
+        seen.add(company_id)
+        company_ids.append(company_id)
+    return company_ids
+
+
+def membership_company_map(company_ids):
+    if not company_ids:
+        return {}
+    companies = Company.query.filter(Company.id.in_(company_ids)).all()
+    return {company.id: company for company in companies}
+
+
+def membership_sort_key(membership):
+    return (0 if membership.is_default else 1, membership.company_id, membership.id)
+
+
+def assign_company_membership(user, company, role=None, is_default=False):
+    membership_role = (role or user.role or "member").strip().lower()
+    if membership_role not in VALID_MEMBERSHIP_ROLES:
+        membership_role = "member"
+
+    membership = UserCompanyMembership.query.filter_by(user_id=user.id, company_id=company.id).first()
+    if not membership:
+        membership = UserCompanyMembership(user_id=user.id, company_id=company.id, role=membership_role)
+        db.session.add(membership)
+        db.session.flush()
+    else:
+        membership.role = membership_role
+
+    if is_default:
+        existing_defaults = UserCompanyMembership.query.filter_by(user_id=user.id, is_default=True).all()
+        for existing in existing_defaults:
+            if existing.id != membership.id:
+                existing.is_default = False
+        membership.is_default = True
+        user.default_company_id = company.id
+    elif user.default_company_id is None:
+        membership.is_default = True
+        user.default_company_id = company.id
+
+    return membership
+
+
+def ensure_user_company_memberships(user):
+    memberships = UserCompanyMembership.query.filter_by(user_id=user.id).all()
+    companies = Company.query.filter_by(org_id=user.org_id).order_by(Company.id.asc()).all()
+    if not companies:
+        companies = [get_or_create_default_company(user.org_id)]
+
+    changed = False
+    if not memberships:
+        if user.role in {"owner", "admin"}:
+            default_company_id = user.default_company_id or companies[0].id
+            for company in companies:
+                assign_company_membership(user, company, role=user.role, is_default=company.id == default_company_id)
+            changed = True
+        else:
+            default_company = next((company for company in companies if company.id == user.default_company_id), companies[0])
+            assign_company_membership(user, default_company, role=user.role, is_default=True)
+            changed = True
+        memberships = UserCompanyMembership.query.filter_by(user_id=user.id).all()
+
+    membership_map = {membership.company_id: membership for membership in memberships}
+    if user.role in {"owner", "admin"}:
+        for company in companies:
+            if company.id not in membership_map:
+                assign_company_membership(user, company, role=user.role, is_default=False)
+                changed = True
+        memberships = UserCompanyMembership.query.filter_by(user_id=user.id).all()
+
+    memberships = sorted(memberships, key=membership_sort_key)
+    if memberships and not any(membership.is_default for membership in memberships):
+        memberships[0].is_default = True
+        changed = True
+    if memberships and user.default_company_id not in {membership.company_id for membership in memberships}:
+        default_membership = next((membership for membership in memberships if membership.is_default), memberships[0])
+        user.default_company_id = default_membership.company_id
+        changed = True
+
+    if changed:
+        safe_commit()
+        memberships = sorted(UserCompanyMembership.query.filter_by(user_id=user.id).all(), key=membership_sort_key)
+    return memberships
+
+
+def company_membership_for_user(user, company_id):
+    memberships = ensure_user_company_memberships(user)
+    for membership in memberships:
+        if membership.company_id == company_id:
+            return membership
+    return None
+
+
+def accessible_companies_for_user(user):
+    memberships = ensure_user_company_memberships(user)
+    company_ids = [membership.company_id for membership in memberships]
+    companies = membership_company_map(company_ids)
+    items = []
+    for membership in sorted(memberships, key=membership_sort_key):
+        company = companies.get(membership.company_id)
+        if company:
+            items.append((company, membership))
+    return items
+
+
+def has_company_permission(user, company, action):
+    membership = company_membership_for_user(user, company.id)
+    if not membership:
+        return False
+    role = membership.role or user.role or "member"
+    return action in ROLE_PERMISSION_MAP.get(role, set())
+
+
+def normalize_membership_specs(raw_memberships, raw_company_ids, fallback_company_id, fallback_role):
+    specs = []
+    if isinstance(raw_memberships, list) and raw_memberships:
+        for raw_item in raw_memberships:
+            item = raw_item or {}
+            company_id = parse_company_id(item.get("company_id"))
+            if company_id is None:
+                continue
+            role = (item.get("role") or fallback_role or "member").strip().lower()
+            if role not in VALID_MEMBERSHIP_ROLES:
+                raise ValueError("invalid membership role")
+            specs.append(
+                {
+                    "company_id": company_id,
+                    "role": role,
+                    "is_default": parse_bool(item.get("is_default"), False),
+                }
+            )
+    else:
+        company_ids = normalize_company_ids(raw_company_ids)
+        if not company_ids and fallback_company_id is not None:
+            company_ids = [fallback_company_id]
+        for index, company_id in enumerate(company_ids):
+            specs.append(
+                {
+                    "company_id": company_id,
+                    "role": fallback_role,
+                    "is_default": index == 0,
+                }
+            )
+
+    unique_specs = []
+    seen = set()
+    for spec in specs:
+        if spec["company_id"] in seen:
+            continue
+        seen.add(spec["company_id"])
+        unique_specs.append(spec)
+
+    if not unique_specs:
+        raise ValueError("at least one company membership is required")
+    if not any(spec["is_default"] for spec in unique_specs):
+        unique_specs[0]["is_default"] = True
+    return unique_specs
+
+
+def apply_user_company_memberships(user, membership_specs):
+    specs = membership_specs or []
+    if not specs:
+        raise ValueError("at least one company membership is required")
+
+    company_ids = [spec["company_id"] for spec in specs]
+    company_map = membership_company_map(company_ids)
+    if len(company_map) != len(company_ids):
+        raise ValueError("one or more companies were not found")
+    invalid_company = next((company for company in company_map.values() if company.org_id != user.org_id), None)
+    if invalid_company:
+        raise ValueError("company does not belong to this organization")
+
+    existing = {membership.company_id: membership for membership in UserCompanyMembership.query.filter_by(user_id=user.id).all()}
+    desired_ids = set(company_ids)
+    for company_id, membership in existing.items():
+        if company_id not in desired_ids:
+            db.session.delete(membership)
+
+    default_company_id = next((spec["company_id"] for spec in specs if spec["is_default"]), specs[0]["company_id"])
+    for spec in specs:
+        membership = existing.get(spec["company_id"])
+        if not membership:
+            membership = UserCompanyMembership(user_id=user.id, company_id=spec["company_id"])
+            db.session.add(membership)
+        membership.role = spec["role"]
+        membership.is_default = spec["company_id"] == default_company_id
+
+    user.default_company_id = default_company_id
+    return company_map.get(default_company_id)
+
+
+def serialize_membership(membership, company=None):
+    company = company or db.session.get(Company, membership.company_id)
+    return {
+        "company_id": membership.company_id,
+        "company_name": company.name if company else "",
+        "role": membership.role,
+        "is_default": bool(membership.is_default),
+    }
+
+
+def serialize_user(user):
+    memberships = ensure_user_company_memberships(user)
+    company_map = membership_company_map([membership.company_id for membership in memberships])
+    return {
+        "id": user.id,
+        "email": user.email,
+        "role": user.role,
+        "org_id": user.org_id,
+        "default_company_id": user.default_company_id,
+        "memberships": [serialize_membership(membership, company_map.get(membership.company_id)) for membership in memberships],
+    }
+
+
 def hash_key(raw_key):
     return hashlib.sha256(raw_key.encode()).hexdigest()
+
+
+def frontend_base_url():
+    explicit = os.getenv("FRONTEND_URL", "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    vercel_url = os.getenv("VERCEL_URL", "").strip()
+    if vercel_url:
+        return f"https://{vercel_url}".rstrip("/")
+    return "http://localhost:5173"
+
+
+def backend_base_url():
+    explicit = os.getenv("PUBLIC_API_URL", "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    return "http://localhost:5000"
+
+
+def should_return_password_reset_preview():
+    return ENV != "production"
+
+
+def plan_rank(plan_code):
+    ordering = {"free": 0, "pro": 1, "ai": 2}
+    return ordering.get(str(plan_code or "free").strip().lower(), 0)
+
+
+def org_has_plan(org, minimum_plan):
+    return plan_rank(org.plan_code if org else "free") >= plan_rank(minimum_plan)
+
+
+def ensure_plan_access(user, minimum_plan):
+    org = db.session.get(Organization, user.org_id)
+    if not org_has_plan(org, minimum_plan):
+        label = get_plan_definition(minimum_plan)["label"]
+        return error_response(f"{label} plan required", 403)
+    return None
+
+
+def normalize_phone_number(raw_value):
+    digits = re.sub(r"\D", "", str(raw_value or ""))
+    if digits.startswith("0") and len(digits) == 10:
+        digits = f"254{digits[1:]}"
+    if digits.startswith("254") and len(digits) == 12:
+        return digits
+    if digits.startswith("7") and len(digits) == 9:
+        return f"254{digits}"
+    raise ValueError("phone_number must be a valid Kenya mobile number")
+
+
+def mpesa_is_configured():
+    return all([MPESA_CONSUMER_KEY, MPESA_CONSUMER_SECRET, MPESA_SHORTCODE, MPESA_PASSKEY])
+
+
+def call_json_api(url, payload=None, headers=None, method=None):
+    request_headers = {"Content-Type": "application/json", **(headers or {})}
+    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    request_method = method or ("POST" if body is not None else "GET")
+    req = urllib.request.Request(url, data=body, headers=request_headers, method=request_method)
+    with urllib.request.urlopen(req, timeout=25) as response:
+        charset = response.headers.get_content_charset() or "utf-8"
+        raw = response.read().decode(charset)
+    return json.loads(raw or "{}")
+
+
+def fetch_mpesa_access_token():
+    credentials = f"{MPESA_CONSUMER_KEY}:{MPESA_CONSUMER_SECRET}".encode("utf-8")
+    encoded_credentials = base64.b64encode(credentials).decode("utf-8")
+    req = urllib.request.Request(
+        f"{MPESA_BASE_URL}/oauth/v1/generate?grant_type=client_credentials",
+        headers={"Authorization": f"Basic {encoded_credentials}"},
+        method="GET",
+    )
+    with urllib.request.urlopen(req, timeout=25) as response:
+        charset = response.headers.get_content_charset() or "utf-8"
+        raw = response.read().decode(charset)
+    payload = json.loads(raw or "{}")
+    return payload.get("access_token")
+
+
+def current_mpesa_timestamp():
+    return datetime.datetime.now(datetime.UTC).strftime("%Y%m%d%H%M%S")
+
+
+def build_mpesa_password(timestamp):
+    raw_password = f"{MPESA_SHORTCODE}{MPESA_PASSKEY}{timestamp}".encode("utf-8")
+    return base64.b64encode(raw_password).decode("utf-8")
+
+
+def initiate_mpesa_stk_push(plan_code, phone_number):
+    plan = get_plan_definition(plan_code)
+    amount = int(plan["local_price_kes"])
+    reference = f"FIN-{plan_code.upper()}-{secrets.token_hex(4).upper()}"
+
+    if not mpesa_is_configured():
+        return {
+            "provider": "mpesa",
+            "status": "preview",
+            "amount": amount,
+            "currency_code": "KES",
+            "plan_code": plan_code,
+            "reference": reference,
+            "merchant_request_id": f"preview-merchant-{secrets.token_hex(3)}",
+            "checkout_request_id": f"preview-checkout-{secrets.token_hex(3)}",
+            "customer_message": f"Preview mode: ask {phone_number} to approve a KES {amount} M-Pesa subscription payment.",
+            "raw": {"preview": True},
+        }
+
+    timestamp = current_mpesa_timestamp()
+    callback_url = MPESA_CALLBACK_URL or f"{backend_base_url()}/billing/mpesa/callback"
+    access_token = fetch_mpesa_access_token()
+    if not access_token:
+        raise ValueError("unable to obtain M-Pesa access token")
+
+    payload = {
+        "BusinessShortCode": MPESA_SHORTCODE,
+        "Password": build_mpesa_password(timestamp),
+        "Timestamp": timestamp,
+        "TransactionType": "CustomerPayBillOnline",
+        "Amount": amount,
+        "PartyA": phone_number,
+        "PartyB": MPESA_SHORTCODE,
+        "PhoneNumber": phone_number,
+        "CallBackURL": callback_url,
+        "AccountReference": reference,
+        "TransactionDesc": f"{plan['label']} monthly subscription",
+    }
+    response = call_json_api(
+        f"{MPESA_BASE_URL}/mpesa/stkpush/v1/processrequest",
+        payload=payload,
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    return {
+        "provider": "mpesa",
+        "status": "pending",
+        "amount": amount,
+        "currency_code": "KES",
+        "plan_code": plan_code,
+        "reference": reference,
+        "merchant_request_id": response.get("MerchantRequestID"),
+        "checkout_request_id": response.get("CheckoutRequestID"),
+        "customer_message": response.get("CustomerMessage") or response.get("ResponseDescription") or "STK push initiated.",
+        "raw": response,
+    }
+
+
+def serialize_billing_payment_request(payment_request):
+    provider_response = {}
+    callback_payload = {}
+    try:
+        provider_response = json.loads(payment_request.provider_response_json or "{}")
+    except (TypeError, ValueError):
+        provider_response = {}
+    try:
+        callback_payload = json.loads(payment_request.callback_payload_json or "{}")
+    except (TypeError, ValueError):
+        callback_payload = {}
+    return {
+        "id": payment_request.id,
+        "provider": payment_request.provider,
+        "plan_code": payment_request.plan_code,
+        "currency_code": payment_request.currency_code,
+        "amount": round(float(payment_request.amount or 0), 2),
+        "phone_number": payment_request.phone_number or "",
+        "external_reference": payment_request.external_reference or "",
+        "merchant_request_id": payment_request.merchant_request_id or "",
+        "checkout_request_id": payment_request.checkout_request_id or "",
+        "status": payment_request.status,
+        "provider_response": provider_response,
+        "callback_payload": callback_payload,
+        "created_at": payment_request.created_at.isoformat() if payment_request.created_at else None,
+        "updated_at": payment_request.updated_at.isoformat() if payment_request.updated_at else None,
+    }
+
+
+def build_password_reset_link(raw_token):
+    return f"{frontend_base_url()}/?auth=reset&token={raw_token}"
+
+
+def expire_existing_password_reset_tokens(user_id):
+    now = datetime.datetime.now(datetime.UTC)
+    tokens = PasswordResetToken.query.filter_by(user_id=user_id, used_at=None).all()
+    for token in tokens:
+        token.used_at = now
+
+
+def issue_password_reset_token(user):
+    raw_token = secrets.token_urlsafe(32)
+    expire_existing_password_reset_tokens(user.id)
+    record = PasswordResetToken(
+        user_id=user.id,
+        token_hash=hash_key(raw_token),
+        expires_at=datetime.datetime.now(datetime.UTC) + datetime.timedelta(minutes=PASSWORD_RESET_EXPIRY_MINUTES),
+    )
+    db.session.add(record)
+    return raw_token
+
+
+def get_valid_password_reset_record(raw_token):
+    token_hash = hash_key(raw_token)
+    record = PasswordResetToken.query.filter_by(token_hash=token_hash).first()
+    if not record:
+        return None
+    if record.used_at is not None:
+        return None
+    expires_at = record.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=datetime.UTC)
+    if expires_at <= datetime.datetime.now(datetime.UTC):
+        record.used_at = datetime.datetime.now(datetime.UTC)
+        safe_commit()
+        return None
+    return record
+
+
+def send_password_reset_email(user, reset_link):
+    smtp_host = os.getenv("SMTP_HOST", "").strip()
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_username = os.getenv("SMTP_USERNAME", "").strip()
+    smtp_password = os.getenv("SMTP_PASSWORD", "")
+    smtp_from = (os.getenv("SMTP_FROM_EMAIL", "").strip() or smtp_username).strip()
+    if not smtp_host or not smtp_from:
+        return False
+
+    message = EmailMessage()
+    message["Subject"] = "Reset your FinancePro password"
+    message["From"] = smtp_from
+    message["To"] = user.email
+    message.set_content(
+        "\n".join(
+            [
+                "A password reset was requested for your FinancePro account.",
+                "",
+                f"Reset link: {reset_link}",
+                "",
+                f"This link expires in {PASSWORD_RESET_EXPIRY_MINUTES} minutes.",
+                "If you did not request this change, you can ignore this email.",
+            ]
+        )
+    )
+
+    try:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as smtp:
+            smtp.ehlo()
+            if os.getenv("SMTP_USE_TLS", "true").strip().lower() not in {"false", "0", "no"}:
+                smtp.starttls()
+                smtp.ehlo()
+            if smtp_username:
+                smtp.login(smtp_username, smtp_password)
+            smtp.send_message(message)
+        return True
+    except Exception:
+        return False
 
 
 def touch_session(user_id):
@@ -967,6 +1733,11 @@ def clear_session(user_id):
     session = ActiveSession.query.filter_by(user_id=user_id).first()
     if session:
         db.session.delete(session)
+    safe_commit()
+
+
+def clear_all_sessions(user_id):
+    ActiveSession.query.filter_by(user_id=user_id).delete()
     safe_commit()
 
 
@@ -1095,7 +1866,7 @@ def get_company_partner_names(company_id):
     return [partner.name for partner in partners]
 
 
-def serialize_company(company):
+def serialize_company(company, membership=None):
     partner_names = get_company_partner_names(company.id)
     return {
         "id": company.id,
@@ -1104,6 +1875,8 @@ def serialize_company(company):
         "partner_names": partner_names,
         "partner_count": len(partner_names),
         "onboarding_complete": is_company_onboarding_complete(company.id),
+        "membership_role": membership.role if membership else None,
+        "is_default": bool(membership.is_default) if membership else False,
     }
 
 
@@ -1117,9 +1890,18 @@ def parse_company_id(raw_value):
 
 
 def resolve_company_for_user(user, raw_company_id=None):
+    memberships = ensure_user_company_memberships(user)
+    if not memberships:
+        return None
+
     company_id = parse_company_id(raw_company_id)
     if company_id is None:
-        return get_or_create_default_company(user.org_id)
+        default_membership = next((membership for membership in memberships if membership.is_default), memberships[0])
+        company_id = default_membership.company_id
+
+    membership = next((row for row in memberships if row.company_id == company_id), None)
+    if not membership:
+        return None
     return Company.query.filter_by(id=company_id, org_id=user.org_id).first()
 
 
@@ -3558,17 +4340,22 @@ def register():
 
     hashed_password = bcrypt.generate_password_hash(password).decode()
     try:
-        org = Organization(name=org_name)
+        org = Organization(name=org_name, billing_email=email)
         db.session.add(org)
         db.session.flush()
+        apply_subscription_plan(org, "free", status="free")
         company = Company(org_id=org.id, name=org_name, business_type=business_type)
         db.session.add(company)
         db.session.flush()
         replace_company_partners(company, partner_names)
         if raw_business_type not in {None, ""}:
             set_company_onboarding_state(company.id, True)
-        user = User(email=email, password=hashed_password, role="owner", org_id=org.id)
+        seed_chart_of_accounts(company)
+        seed_integration_connections(company)
+        user = User(email=email, password=hashed_password, role="owner", org_id=org.id, default_company_id=company.id)
         db.session.add(user)
+        db.session.flush()
+        assign_company_membership(user, company, role="owner", is_default=True)
         if not safe_commit():
             return error_response("database error during registration", 503)
     except IntegrityError:
@@ -3579,6 +4366,75 @@ def register():
         return error_response("database error during registration", 503)
 
     return {"msg": "registered", "company": serialize_company(company)}
+
+
+@app.route("/password-reset/request", methods=["POST"])
+@limiter.limit("5 per hour")
+def request_password_reset():
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    if not email:
+        return error_response("email is required")
+
+    response = {"msg": "If an account exists for that email, reset instructions have been prepared."}
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        return response
+
+    raw_token = issue_password_reset_token(user)
+    if not safe_commit():
+        return error_response("database error while preparing password reset", 503)
+
+    reset_link = build_password_reset_link(raw_token)
+    email_sent = send_password_reset_email(user, reset_link)
+    log(user.id, "requested password reset")
+
+    if email_sent:
+        response["delivery"] = "email"
+    elif should_return_password_reset_preview():
+        response["delivery"] = "preview"
+        response["reset_token"] = raw_token
+        response["reset_link"] = reset_link
+
+    return response
+
+
+@app.route("/password-reset/confirm", methods=["POST"])
+@limiter.limit("10 per hour")
+def confirm_password_reset():
+    data = request.get_json(silent=True) or {}
+    raw_token = (data.get("token") or "").strip()
+    password = data.get("password") or ""
+
+    if not raw_token or not password:
+        return error_response("token and password are required")
+    if len(password) < 8:
+        return error_response("password must be at least 8 characters")
+
+    record = get_valid_password_reset_record(raw_token)
+    if not record:
+        return error_response("invalid or expired reset token", 400)
+
+    user = db.session.get(User, record.user_id)
+    if not user:
+        return error_response("invalid or expired reset token", 400)
+
+    now = datetime.datetime.now(datetime.UTC)
+    user.password = bcrypt.generate_password_hash(password).decode()
+    record.used_at = now
+    other_tokens = PasswordResetToken.query.filter(
+        PasswordResetToken.user_id == user.id,
+        PasswordResetToken.used_at.is_(None),
+        PasswordResetToken.id != record.id,
+    ).all()
+    for token in other_tokens:
+        token.used_at = now
+    ActiveSession.query.filter_by(user_id=user.id).delete()
+    if not safe_commit():
+        return error_response("database error while resetting password", 503)
+
+    log(user.id, "reset password")
+    return {"msg": "Password reset complete. Sign in with your new password."}
 
 
 @app.route("/login", methods=["POST"])
@@ -3639,8 +4495,25 @@ def invite():
     if role not in VALID_ROLES:
         return error_response("invalid role")
 
-    user = User(email=invite_email, password=hashed_password, role=role, org_id=me.org_id)
+    try:
+        membership_specs = normalize_membership_specs(
+            data.get("memberships"),
+            data.get("company_ids"),
+            parse_company_id(data.get("company_id")) or me.default_company_id or resolve_company_for_user(me).id,
+            role,
+        )
+    except ValueError as exc:
+        return error_response(str(exc))
+
+    company_map = membership_company_map([spec["company_id"] for spec in membership_specs])
+    if len(company_map) != len(membership_specs) or any(company.org_id != me.org_id for company in company_map.values()):
+        return error_response("company not found", 404)
+
+    default_company_id = next((spec["company_id"] for spec in membership_specs if spec["is_default"]), membership_specs[0]["company_id"])
+    user = User(email=invite_email, password=hashed_password, role=role, org_id=me.org_id, default_company_id=default_company_id)
     db.session.add(user)
+    db.session.flush()
+    apply_user_company_memberships(user, membership_specs)
     if not safe_commit():
         return error_response("database error while inviting user", 503)
 
@@ -3746,13 +4619,14 @@ def list_companies():
     if not user:
         return error_response("invalid token", 401)
 
-    companies = Company.query.filter_by(org_id=user.org_id).order_by(Company.id.asc()).all()
-    if not companies:
-        companies = [get_or_create_default_company(user.org_id)]
+    company_pairs = accessible_companies_for_user(user)
+    if not company_pairs:
+        company = get_or_create_default_company(user.org_id)
+        assign_company_membership(user, company, role=user.role, is_default=True)
+        safe_commit()
+        company_pairs = accessible_companies_for_user(user)
 
-    return jsonify(
-        [serialize_company(company) for company in companies]
-    )
+    return jsonify([serialize_company(company, membership=membership) for company, membership in company_pairs])
 
 
 @app.route("/companies", methods=["POST"])
@@ -3762,6 +4636,10 @@ def create_company():
     user = get_user_from_token()
     if not user:
         return error_response("invalid token", 401)
+
+    org = db.session.get(Organization, user.org_id)
+    if not org:
+        return error_response("organization not found", 404)
 
     data = request.get_json(silent=True) or {}
     name = (data.get("name") or "").strip()
@@ -3777,6 +4655,10 @@ def create_company():
     validation_error = validate_company_setup(business_type, partner_names)
     if validation_error:
         return error_response(validation_error)
+    company_limit = int(org.max_companies or get_plan_definition(org.plan_code)["max_companies"])
+    existing_company_count = Company.query.filter_by(org_id=user.org_id).count()
+    if existing_company_count >= company_limit:
+        return error_response("current plan limit reached; upgrade billing to add more companies", 403)
 
     company = Company(org_id=user.org_id, name=name, business_type=business_type)
     db.session.add(company)
@@ -3785,11 +4667,16 @@ def create_company():
     set_company_onboarding_state(company.id, True)
     seed_chart_of_accounts(company)
     seed_integration_connections(company)
+    assign_company_membership(user, company, role=user.role, is_default=False)
+    admin_users = User.query.filter(User.org_id == user.org_id, User.role.in_(["owner", "admin"])).all()
+    for org_user in admin_users:
+        assign_company_membership(org_user, company, role=org_user.role, is_default=False)
     if not safe_commit():
         return error_response("database error while creating company", 503)
 
-    log(user.id, f"created company {name}")
-    return serialize_company(company), 201
+    log(user.id, f"created company {name}", company_id=company.id)
+    membership = company_membership_for_user(user, company.id)
+    return serialize_company(company, membership=membership), 201
 
 
 @app.route("/companies/<int:company_id>/setup", methods=["PUT"])
@@ -3800,7 +4687,7 @@ def update_company_setup(company_id):
     if not user:
         return error_response("invalid token", 401)
 
-    company = Company.query.filter_by(id=company_id, org_id=user.org_id).first()
+    company = resolve_company_for_user(user, company_id)
     if not company:
         return error_response("company not found", 404)
 
@@ -3824,8 +4711,725 @@ def update_company_setup(company_id):
     if not safe_commit():
         return error_response("database error while saving company setup", 503)
 
-    log(user.id, f"configured company {company.name} as {business_type}")
-    return serialize_company(company)
+    log(user.id, f"configured company {company.name} as {business_type}", company_id=company.id)
+    membership = company_membership_for_user(user, company.id)
+    return serialize_company(company, membership=membership)
+
+
+def normalized_trial_balance_amount(item):
+    amount = float(item.get("net_balance", 0) or 0)
+    return round(-amount if item.get("normal_balance") == "credit" else amount, 2)
+
+
+def build_company_ai_snapshot(company):
+    finance = calculate_finance_summary(company)
+    tax = calculate_tax_summary(company)
+    accounting = build_accounting_overview(company)
+    workforce = build_workforce_overview(company)
+    inventory = build_inventory_summary(company)
+    projects = build_project_summary(company)
+    reports = aggregate_org_reports(company.org_id, company.id)
+
+    trial_items = accounting["trial_balance"]["items"]
+    current_assets = round(
+        sum(
+            max(0.0, normalized_trial_balance_amount(item))
+            for item in trial_items
+            if item["category"] == "asset" and item["subtype"] == "current"
+        ),
+        2,
+    )
+    current_liabilities = round(
+        sum(
+            max(0.0, normalized_trial_balance_amount(item))
+            for item in trial_items
+            if item["category"] == "liability" and item["subtype"] == "current"
+        ),
+        2,
+    )
+    cash_balance = round(
+        sum(max(0.0, normalized_trial_balance_amount(item)) for item in trial_items if item["code"] == "1000"),
+        2,
+    )
+    annual_revenue = round(float(reports.get("revenue", 0) or 0), 2)
+    annual_expenses = round(float(reports.get("expenses", 0) or 0), 2)
+    monthly_inflow = round(max(float(finance["collected_this_month"]), annual_revenue / 12 if annual_revenue else 0), 2)
+    baseline_outflow = float(finance["paid_this_month"]) + float(workforce["payroll_this_month"])
+    fallback_outflow = annual_expenses / 12 if annual_expenses else (float(finance["open_payables"]) / 3 if finance["open_payables"] else 0)
+    monthly_outflow = round(max(baseline_outflow, fallback_outflow, 1.0), 2)
+    current_ratio = round(current_assets / current_liabilities, 2) if current_liabilities > 0 else None
+    cash_runway_months = round(cash_balance / monthly_outflow, 1) if monthly_outflow > 0 else None
+
+    tax_drag = round(max(float(tax["net_tax_due"]), 0.0) / 3, 2) if float(tax["net_tax_due"]) > 0 else 0.0
+    projected_cash = cash_balance
+    forecast = []
+    for month_number in range(1, 4):
+        projected_cash = round(projected_cash + monthly_inflow - monthly_outflow - tax_drag, 2)
+        forecast.append(
+            {
+                "month": month_number,
+                "label": f"{month_number * 30} days",
+                "projected_cash": projected_cash,
+            }
+        )
+
+    return {
+        "company_id": company.id,
+        "company_name": company.name,
+        "metrics": {
+            "cash_balance": cash_balance,
+            "current_assets": current_assets,
+            "current_liabilities": current_liabilities,
+            "current_ratio": current_ratio,
+            "annual_revenue": annual_revenue,
+            "annual_expenses": annual_expenses,
+            "monthly_inflow": monthly_inflow,
+            "monthly_outflow": monthly_outflow,
+            "cash_runway_months": cash_runway_months,
+        },
+        "finance": finance,
+        "tax": tax,
+        "workforce": workforce,
+        "inventory": {
+            "inventory_value": inventory["inventory_value"],
+            "low_stock_count": inventory["low_stock_count"],
+            "open_purchase_orders": inventory["open_purchase_orders"],
+        },
+        "projects": {
+            "total_revenue": projects["total_revenue"],
+            "total_cost": projects["total_cost"],
+            "total_margin": projects["total_margin"],
+        },
+        "forecast": forecast,
+    }
+
+
+def build_ai_cfo_alerts(snapshot):
+    finance = snapshot["finance"]
+    tax = snapshot["tax"]
+    inventory = snapshot["inventory"]
+    workforce = snapshot["workforce"]
+    metrics = snapshot["metrics"]
+    alerts = []
+
+    if metrics["current_ratio"] is not None and metrics["current_ratio"] < 1:
+        alerts.append(
+            {
+                "severity": "high",
+                "title": "Liquidity risk",
+                "message": f"Current ratio is {metrics['current_ratio']}, so short-term obligations are outpacing liquid assets.",
+                "recommendation": "Accelerate collections, delay discretionary spend, and review payable timing this week.",
+            }
+        )
+    if float(finance["overdue_receivables"]) > 0:
+        alerts.append(
+            {
+                "severity": "medium",
+                "title": "Collections pressure",
+                "message": f"There are {finance['overdue_invoice_count']} overdue invoices totaling {round(float(finance['overdue_receivables']), 2)}.",
+                "recommendation": "Trigger a collections sequence and escalate the oldest invoices to the owner or finance lead.",
+            }
+        )
+    if float(finance["overdue_payables"]) > 0:
+        alerts.append(
+            {
+                "severity": "medium",
+                "title": "Supplier obligations overdue",
+                "message": f"Overdue payables total {round(float(finance['overdue_payables']), 2)} across {finance['overdue_bill_count']} bills.",
+                "recommendation": "Prioritize critical vendors and schedule payment rails before terms deteriorate.",
+            }
+        )
+    if int(finance["bank_unmatched_count"]) > 0:
+        alerts.append(
+            {
+                "severity": "medium",
+                "title": "Bank close backlog",
+                "message": f"{finance['bank_unmatched_count']} bank transactions still need reconciliation.",
+                "recommendation": "Run the reconciliation workspace and clear unmatched items before month-end reporting.",
+            }
+        )
+    if int(inventory["low_stock_count"]) > 0:
+        alerts.append(
+            {
+                "severity": "medium",
+                "title": "Reorder risk",
+                "message": f"{inventory['low_stock_count']} inventory items are at or below reorder point.",
+                "recommendation": "Release purchase orders for critical SKUs and review safety stock on the fastest movers.",
+            }
+        )
+    if float(tax["net_tax_due"]) > 0:
+        alerts.append(
+            {
+                "severity": "medium",
+                "title": "Tax liability due",
+                "message": f"Estimated net tax due is {round(float(tax['net_tax_due']), 2)} in {tax['jurisdiction_code']}.",
+                "recommendation": "Reserve cash now and prepare the filing pack before the next statutory deadline.",
+            }
+        )
+    if snapshot["forecast"] and snapshot["forecast"][-1]["projected_cash"] < 0:
+        alerts.append(
+            {
+                "severity": "high",
+                "title": "Projected cash shortfall",
+                "message": f"Cash is forecast to fall to {snapshot['forecast'][-1]['projected_cash']} within 90 days.",
+                "recommendation": "Cut non-essential outflow, pull collections forward, or line up short-term financing immediately.",
+            }
+        )
+    if float(workforce["contractor_1099_exposure"]) >= 600:
+        alerts.append(
+            {
+                "severity": "low",
+                "title": "1099 review",
+                "message": f"Contractor exposure this period is {round(float(workforce['contractor_1099_exposure']), 2)}.",
+                "recommendation": "Confirm contractor tax details now so year-end compliance does not become a scramble.",
+            }
+        )
+
+    return alerts
+
+
+def build_ai_cfo_overview(company):
+    snapshot = build_company_ai_snapshot(company)
+    alerts = build_ai_cfo_alerts(snapshot)
+    top_actions = [alert["recommendation"] for alert in alerts[:4]]
+    metrics = snapshot["metrics"]
+    narrative = (
+        f"{company.name} is carrying {metrics['cash_balance']} in cash with "
+        f"{snapshot['finance']['open_receivables']} outstanding receivables and "
+        f"{snapshot['finance']['open_payables']} open payables. "
+        f"Projected 90-day cash is {snapshot['forecast'][-1]['projected_cash'] if snapshot['forecast'] else metrics['cash_balance']}."
+    )
+    return {
+        **snapshot,
+        "alerts": alerts,
+        "top_actions": top_actions,
+        "narrative": narrative,
+    }
+
+
+def answer_ai_cfo_question(question, overview):
+    lowered = str(question or "").strip().lower()
+    metrics = overview["metrics"]
+    finance = overview["finance"]
+    tax = overview["tax"]
+    inventory = overview["inventory"]
+    workforce = overview["workforce"]
+
+    if "profit" in lowered or "margin" in lowered:
+        return (
+            f"Recorded annual revenue is {metrics['annual_revenue']} against expenses of {metrics['annual_expenses']}. "
+            f"Project margin currently stands at {overview['projects']['total_margin']}."
+        )
+    if "cash" in lowered or "runway" in lowered or "liquidity" in lowered:
+        return (
+            f"Cash balance is {metrics['cash_balance']} with a monthly outflow run rate of {metrics['monthly_outflow']}. "
+            f"Estimated cash runway is {metrics['cash_runway_months']} months."
+        )
+    if "tax" in lowered or "vat" in lowered or "filing" in lowered:
+        return (
+            f"Estimated net tax due is {tax['net_tax_due']} under {tax['jurisdiction_code']}. "
+            f"Prepare the next {tax['filing_frequency']} filing before cash is committed elsewhere."
+        )
+    if "inventory" in lowered or "stock" in lowered or "purchase order" in lowered:
+        return (
+            f"{inventory['low_stock_count']} items are at reorder risk and there are "
+            f"{inventory['open_purchase_orders']} open purchase orders."
+        )
+    if "payroll" in lowered or "staff" in lowered or "contractor" in lowered:
+        return (
+            f"Payroll cash this month is {workforce['payroll_this_month']} and contractor 1099 exposure is "
+            f"{workforce['contractor_1099_exposure']}."
+        )
+    if overview["top_actions"]:
+        return f"{overview['narrative']} Top action: {overview['top_actions'][0]}"
+    return overview["narrative"]
+
+
+def serialize_background_job(job):
+    payload = {}
+    result = {}
+    try:
+        payload = json.loads(job.payload_json or "{}")
+    except (TypeError, ValueError):
+        payload = {}
+    try:
+        result = json.loads(job.result_json or "{}")
+    except (TypeError, ValueError):
+        result = {}
+    return {
+        "id": job.id,
+        "org_id": job.org_id,
+        "company_id": job.company_id,
+        "requested_by": job.requested_by,
+        "job_type": job.job_type,
+        "status": job.status,
+        "provider": job.provider,
+        "payload": payload,
+        "result": result,
+        "error_message": job.error_message or "",
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+    }
+
+
+def run_background_job(job_id):
+    job = db.session.get(BackgroundJob, job_id)
+    if not job:
+        return None
+    if job.status in JOB_TERMINAL_STATUSES:
+        return serialize_background_job(job)
+
+    job.status = "running"
+    job.started_at = datetime.datetime.now(datetime.UTC)
+    safe_commit()
+
+    try:
+        company = Company.query.filter_by(id=job.company_id, org_id=job.org_id).first()
+        if not company:
+            raise ValueError("company not found")
+        payload = {}
+        try:
+            payload = json.loads(job.payload_json or "{}")
+        except (TypeError, ValueError):
+            payload = {}
+
+        if job.job_type == "finance_digest":
+            result = build_ai_cfo_overview(company)
+        elif job.job_type == "tax_filing_package":
+            profile = get_or_create_tax_profile(company)
+            result = build_tax_filing_package(
+                company,
+                profile,
+                period_start=parse_iso_date(payload.get("period_start"), "period_start", default=None),
+                period_end=parse_iso_date(payload.get("period_end"), "period_end", default=None),
+            )
+        elif job.job_type == "accountant_brief":
+            result = build_accountant_toolkit(company)
+        else:
+            raise ValueError("unsupported job type")
+
+        job.status = "completed"
+        job.result_json = json.dumps(result)
+        job.error_message = None
+    except Exception as exc:
+        job.status = "failed"
+        job.error_message = str(exc)
+    finally:
+        job.completed_at = datetime.datetime.now(datetime.UTC)
+        safe_commit()
+
+    return serialize_background_job(job)
+
+
+if celery_app:
+    @celery_app.task(name="financial_dashboard.process_background_job")
+    def process_background_job(job_id):
+        return run_background_job(job_id)
+else:
+    def process_background_job(job_id):  # pragma: no cover - fallback shim
+        return run_background_job(job_id)
+
+
+def plan_code_from_stripe_object(obj):
+    metadata = obj.get("metadata") or {}
+    metadata_plan = (metadata.get("plan_code") or "").strip().lower()
+    if metadata_plan in PLAN_DEFINITIONS:
+        return metadata_plan
+
+    items = obj.get("items") or {}
+    for item in items.get("data", []) if isinstance(items, dict) else []:
+        price = (item or {}).get("price") or {}
+        price_id = price.get("id") if isinstance(price, dict) else str(price or "")
+        for plan_code, configured_price_id in STRIPE_PRICE_IDS.items():
+            if configured_price_id and configured_price_id == price_id:
+                return plan_code
+    return None
+
+
+def resolve_org_from_billing_object(obj):
+    metadata = obj.get("metadata") or {}
+    raw_org_id = metadata.get("org_id")
+    try:
+        org_id = int(raw_org_id)
+    except (TypeError, ValueError):
+        org_id = None
+
+    if org_id:
+        org = db.session.get(Organization, org_id)
+        if org:
+            return org
+
+    customer_id = (obj.get("customer") or "").strip()
+    subscription_id = (obj.get("subscription") or obj.get("id") or "").strip()
+    if subscription_id:
+        org = Organization.query.filter_by(stripe_subscription_id=subscription_id).first()
+        if org:
+            return org
+    if customer_id:
+        return Organization.query.filter_by(stripe_customer_id=customer_id).first()
+    return None
+
+
+def apply_billing_event(event):
+    event_type = (event.get("type") or "").strip()
+    obj = (event.get("data") or {}).get("object") or {}
+    org = resolve_org_from_billing_object(obj)
+    if not org:
+        return False
+
+    plan_code = plan_code_from_stripe_object(obj) or org.plan_code or "free"
+    customer_id = (obj.get("customer") or "").strip() or None
+
+    if event_type == "checkout.session.completed":
+        apply_subscription_plan(
+            org,
+            plan_code,
+            status="active",
+            stripe_customer_id=customer_id,
+            stripe_subscription_id=(obj.get("subscription") or "").strip() or None,
+        )
+    elif event_type in {"customer.subscription.created", "customer.subscription.updated"}:
+        apply_subscription_plan(
+            org,
+            plan_code,
+            status=(obj.get("status") or "active").strip().lower(),
+            stripe_customer_id=customer_id,
+            stripe_subscription_id=(obj.get("id") or "").strip() or None,
+        )
+    elif event_type == "customer.subscription.deleted":
+        apply_subscription_plan(org, "free", status="cancelled", stripe_customer_id=customer_id, stripe_subscription_id=None)
+    elif event_type == "invoice.paid":
+        org.subscription_status = "active"
+        org.subscription_updated_at = datetime.datetime.now(datetime.UTC)
+        if customer_id:
+            org.stripe_customer_id = customer_id
+    elif event_type == "invoice.payment_failed":
+        org.subscription_status = "past_due"
+        org.subscription_updated_at = datetime.datetime.now(datetime.UTC)
+    else:
+        return False
+
+    safe_commit()
+    return True
+
+
+@app.route("/billing/plans")
+@jwt_required()
+def billing_plans():
+    return {"items": list(PLAN_DEFINITIONS.values())}
+
+
+@app.route("/billing/summary")
+@jwt_required()
+def billing_summary():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    org = db.session.get(Organization, user.org_id)
+    if not org:
+        return error_response("organization not found", 404)
+
+    return {
+        **serialize_subscription(org),
+        "company_count": Company.query.filter_by(org_id=user.org_id).count(),
+        "accessible_company_count": len(ensure_user_company_memberships(user)),
+        "usage": int(org.usage or 0),
+        "mpesa_configured": mpesa_is_configured(),
+        "local_currency": "KES",
+    }
+
+
+@app.route("/billing/checkout-session", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin")
+@limiter.limit("10 per minute")
+def create_billing_checkout_session():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+    if not stripe or not STRIPE_SECRET_KEY:
+        return error_response("stripe is not configured", 503)
+
+    data = request.get_json(silent=True) or {}
+    plan_code = (data.get("plan_code") or "").strip().lower()
+    if plan_code not in {"pro", "ai"}:
+        return error_response("plan_code must be pro or ai")
+
+    price_id = STRIPE_PRICE_IDS.get(plan_code)
+    if not price_id:
+        return error_response("selected Stripe price is not configured", 503)
+
+    org = db.session.get(Organization, user.org_id)
+    if not org:
+        return error_response("organization not found", 404)
+
+    success_url = (data.get("success_url") or f"{frontend_base_url()}/?billing=success").strip()
+    cancel_url = (data.get("cancel_url") or f"{frontend_base_url()}/?billing=cancelled").strip()
+    customer_id = org.stripe_customer_id
+    if not customer_id:
+        customer = stripe.Customer.create(
+            email=org.billing_email or user.email,
+            name=org.name,
+            metadata={"org_id": str(org.id)},
+        )
+        customer_id = customer.get("id")
+        org.stripe_customer_id = customer_id
+        safe_commit()
+
+    session = stripe.checkout.Session.create(
+        mode="subscription",
+        customer=customer_id,
+        line_items=[{"price": price_id, "quantity": 1}],
+        success_url=success_url,
+        cancel_url=cancel_url,
+        metadata={"org_id": str(org.id), "plan_code": plan_code},
+    )
+    return {"checkout_url": session.get("url"), "session_id": session.get("id")}
+
+
+@app.route("/billing/webhook", methods=["POST"])
+def stripe_billing_webhook():
+    if stripe and STRIPE_WEBHOOK_SECRET:
+        payload = request.get_data()
+        signature = request.headers.get("Stripe-Signature", "")
+        try:
+            event = stripe.Webhook.construct_event(payload, signature, STRIPE_WEBHOOK_SECRET)
+        except Exception:
+            return error_response("invalid webhook signature", 400)
+    else:
+        event = request.get_json(silent=True) or {}
+
+    handled = apply_billing_event(event)
+    return {"received": True, "handled": handled}
+
+
+@app.route("/billing/mpesa/checkout", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin")
+@limiter.limit("10 per minute")
+def create_mpesa_checkout():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    data = request.get_json(silent=True) or {}
+    plan_code = (data.get("plan_code") or "").strip().lower()
+    if plan_code not in {"pro", "ai"}:
+        return error_response("plan_code must be pro or ai")
+
+    try:
+        phone_number = normalize_phone_number(data.get("phone_number"))
+    except ValueError as exc:
+        return error_response(str(exc))
+
+    org = db.session.get(Organization, user.org_id)
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not org:
+        return error_response("organization not found", 404)
+    if not company:
+        return error_response("company not found", 404)
+
+    try:
+        response = initiate_mpesa_stk_push(plan_code, phone_number)
+    except urllib.error.HTTPError as exc:
+        return error_response(f"M-Pesa request failed ({exc.code})", 502)
+    except urllib.error.URLError:
+        return error_response("unable to reach M-Pesa right now", 502)
+    except Exception as exc:
+        return error_response(str(exc), 400)
+
+    payment_request = BillingPaymentRequest(
+        org_id=org.id,
+        company_id=company.id,
+        requested_by=user.id,
+        provider="mpesa",
+        plan_code=plan_code,
+        currency_code="KES",
+        amount=float(response["amount"]),
+        phone_number=phone_number,
+        external_reference=response.get("reference"),
+        merchant_request_id=response.get("merchant_request_id"),
+        checkout_request_id=response.get("checkout_request_id"),
+        status=response.get("status", "pending"),
+        provider_response_json=json.dumps(response.get("raw") or {}),
+    )
+    db.session.add(payment_request)
+    if not safe_commit():
+        return error_response("database error while creating M-Pesa checkout", 503)
+
+    log(user.id, f"initiated mpesa checkout for {plan_code}", company_id=company.id)
+    return {
+        **serialize_billing_payment_request(payment_request),
+        "customer_message": response.get("customer_message", ""),
+        "preview_mode": response.get("status") == "preview",
+    }, 201
+
+
+@app.route("/billing/mpesa/requests/<int:payment_request_id>")
+@jwt_required()
+def get_mpesa_payment_request(payment_request_id):
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    payment_request = BillingPaymentRequest.query.filter_by(id=payment_request_id, org_id=user.org_id).first()
+    if not payment_request:
+        return error_response("payment request not found", 404)
+    if not company_membership_for_user(user, payment_request.company_id):
+        return error_response("not allowed", 403)
+    return serialize_billing_payment_request(payment_request)
+
+
+@app.route("/billing/mpesa/callback", methods=["POST"])
+def mpesa_callback():
+    payload = request.get_json(silent=True) or {}
+    stk_payload = (((payload.get("Body") or {}).get("stkCallback")) or {})
+    checkout_request_id = (stk_payload.get("CheckoutRequestID") or "").strip()
+    payment_request = BillingPaymentRequest.query.filter_by(checkout_request_id=checkout_request_id).first()
+    if not payment_request:
+        return {"received": True, "matched": False}
+
+    payment_request.callback_payload_json = json.dumps(payload)
+    result_code = str(stk_payload.get("ResultCode", ""))
+    if result_code in {"0", "00"}:
+        payment_request.status = "paid"
+        org = db.session.get(Organization, payment_request.org_id)
+        if org:
+            apply_subscription_plan(org, payment_request.plan_code, status="active")
+    else:
+        payment_request.status = "failed"
+    if not safe_commit():
+        return error_response("database error while processing callback", 503)
+    return {"received": True, "matched": True}
+
+
+@app.route("/ops/jobs")
+@jwt_required()
+def list_background_jobs():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    query = BackgroundJob.query.filter_by(org_id=user.org_id)
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if request.args.get("company_id"):
+        if not company:
+            return error_response("company not found", 404)
+        query = query.filter_by(company_id=company.id)
+
+    jobs = query.order_by(BackgroundJob.created_at.desc(), BackgroundJob.id.desc()).limit(25).all()
+    visible_company_ids = {membership.company_id for membership in ensure_user_company_memberships(user)}
+    return {"items": [serialize_background_job(job) for job in jobs if job.company_id in visible_company_ids]}
+
+
+@app.route("/ops/jobs", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+@plan_required("pro")
+@limiter.limit("30 per minute")
+def create_background_job_route():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    data = request.get_json(silent=True) or {}
+    job_type = (data.get("job_type") or "").strip().lower()
+    if job_type not in JOB_TYPES:
+        return error_response("unsupported job type")
+
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+    if not has_company_permission(user, company, "jobs:run"):
+        return error_response("not allowed", 403)
+
+    job = BackgroundJob(
+        org_id=company.org_id,
+        company_id=company.id,
+        requested_by=user.id,
+        job_type=job_type,
+        payload_json=json.dumps(
+            {
+                "period_start": data.get("period_start"),
+                "period_end": data.get("period_end"),
+            }
+        ),
+        provider="celery" if ASYNC_JOB_MODE == "celery" and celery_app else "inline",
+    )
+    db.session.add(job)
+    if not safe_commit():
+        return error_response("database error while creating background job", 503)
+
+    if job.provider == "celery" and celery_app:
+        process_background_job.delay(job.id)
+        return serialize_background_job(job), 202
+
+    result = run_background_job(job.id)
+    return result, 201
+
+
+@app.route("/ops/jobs/<int:job_id>")
+@jwt_required()
+def get_background_job_route(job_id):
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    job = BackgroundJob.query.filter_by(id=job_id, org_id=user.org_id).first()
+    if not job:
+        return error_response("job not found", 404)
+    if not company_membership_for_user(user, job.company_id):
+        return error_response("not allowed", 403)
+    return serialize_background_job(job)
+
+
+@app.route("/ai-cfo/overview")
+@jwt_required()
+def ai_cfo_overview():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+    if not has_company_permission(user, company, "company:view"):
+        return error_response("not allowed", 403)
+
+    return build_ai_cfo_overview(company)
+
+
+@app.route("/ai-cfo/ask", methods=["POST"])
+@jwt_required()
+@limiter.limit("30 per minute")
+def ai_cfo_ask():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    data = request.get_json(silent=True) or {}
+    question = (data.get("question") or "").strip()
+    if not question:
+        return error_response("question is required")
+
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+    if not has_company_permission(user, company, "ai:ask"):
+        return error_response("not allowed", 403)
+
+    org = db.session.get(Organization, user.org_id)
+    if not org or not bool(org.ai_assistant_enabled):
+        return error_response("AI CFO chat is available on the AI plan", 403)
+
+    overview = build_ai_cfo_overview(company)
+    return {
+        "answer": answer_ai_cfo_question(question, overview),
+        "narrative": overview["narrative"],
+        "top_actions": overview["top_actions"],
+    }
 
 
 # ---------------- FINANCE OPS ----------------
@@ -4342,6 +5946,7 @@ def banking_connections():
 @app.route("/finance/banking/plaid/link-token", methods=["POST"])
 @jwt_required()
 @roles_required("owner", "admin", "manager", "accountant")
+@plan_required("pro")
 def create_plaid_link_token():
     user = get_user_from_token()
     data = request.get_json(silent=True) or {}
@@ -4371,6 +5976,7 @@ def create_plaid_link_token():
 @app.route("/finance/banking/plaid/exchange-token", methods=["POST"])
 @jwt_required()
 @roles_required("owner", "admin", "manager", "accountant")
+@plan_required("pro")
 def exchange_plaid_public_token():
     user = get_user_from_token()
     data = request.get_json(silent=True) or {}
@@ -4428,6 +6034,7 @@ def exchange_plaid_public_token():
 @app.route("/finance/banking/plaid/sync", methods=["POST"])
 @jwt_required()
 @roles_required("owner", "admin", "manager", "accountant")
+@plan_required("pro")
 def sync_plaid_transactions():
     user = get_user_from_token()
     data = request.get_json(silent=True) or {}
@@ -4958,6 +6565,7 @@ def bill_pay_summary():
 @app.route("/finance/bill-pay/disbursements", methods=["POST"])
 @jwt_required()
 @roles_required("owner", "admin", "manager", "accountant")
+@plan_required("pro")
 def create_bill_disbursement():
     user = get_user_from_token()
     data = request.get_json(silent=True) or {}
@@ -5009,6 +6617,7 @@ def create_bill_disbursement():
 @app.route("/finance/bill-pay/disbursements/<int:disbursement_id>/execute", methods=["POST"])
 @jwt_required()
 @roles_required("owner", "admin", "manager", "accountant")
+@plan_required("pro")
 def execute_bill_disbursement(disbursement_id):
     user = get_user_from_token()
     disbursement = BillDisbursement.query.filter_by(id=disbursement_id, org_id=user.org_id).first()
@@ -5079,6 +6688,7 @@ def list_reconciliation_rules():
 @app.route("/finance/reconciliation/rules", methods=["POST"])
 @jwt_required()
 @roles_required("owner", "admin", "manager", "accountant")
+@plan_required("pro")
 def create_reconciliation_rule():
     user = get_user_from_token()
     data = request.get_json(silent=True) or {}
@@ -5122,6 +6732,7 @@ def create_reconciliation_rule():
 @app.route("/finance/reconciliation/rules/auto-apply", methods=["POST"])
 @jwt_required()
 @roles_required("owner", "admin", "manager", "accountant")
+@plan_required("pro")
 def auto_apply_rules_route():
     user = get_user_from_token()
     data = request.get_json(silent=True) or {}
@@ -5233,6 +6844,7 @@ def list_tax_filings():
 @app.route("/finance/tax/filings", methods=["POST"])
 @jwt_required()
 @roles_required("owner", "admin", "manager", "accountant")
+@plan_required("pro")
 def prepare_tax_filing():
     user = get_user_from_token()
     data = request.get_json(silent=True) or {}
@@ -5280,6 +6892,7 @@ def prepare_tax_filing():
 @app.route("/finance/tax/filings/<int:filing_id>/submit", methods=["POST"])
 @jwt_required()
 @roles_required("owner", "admin", "manager", "accountant")
+@plan_required("pro")
 def submit_tax_filing(filing_id):
     user = get_user_from_token()
     filing = TaxFiling.query.filter_by(id=filing_id, org_id=user.org_id).first()
@@ -5967,6 +7580,7 @@ def list_integrations():
 @app.route("/finance/integrations", methods=["POST"])
 @jwt_required()
 @roles_required("owner", "admin", "manager", "accountant")
+@plan_required("pro")
 def connect_integration():
     user = get_user_from_token()
     data = request.get_json(silent=True) or {}
@@ -6002,6 +7616,7 @@ def connect_integration():
 @app.route("/finance/integrations/<int:integration_id>/sync", methods=["POST"])
 @jwt_required()
 @roles_required("owner", "admin", "manager", "accountant")
+@plan_required("pro")
 def sync_integration(integration_id):
     user = get_user_from_token()
     connection = IntegrationConnection.query.filter_by(id=integration_id, org_id=user.org_id).first()
@@ -6045,15 +7660,50 @@ def me():
     if not user:
         return error_response("invalid token", 401)
 
-    company = get_or_create_default_company(user.org_id)
-    return {
-        "id": user.id,
-        "email": user.email,
-        "role": user.role,
-        "org_id": user.org_id,
-        "default_company_id": company.id,
-        "business_type": company.business_type,
-    }
+    memberships = ensure_user_company_memberships(user)
+    company = resolve_company_for_user(user, user.default_company_id)
+    org = db.session.get(Organization, user.org_id)
+    payload = serialize_user(user)
+    payload.update(
+        {
+            "default_company_id": company.id if company else user.default_company_id,
+            "business_type": company.business_type if company else "sole_proprietor",
+            "accessible_company_count": len(memberships),
+            "subscription": serialize_subscription(org) if org else serialize_subscription(Organization(name="", usage=0)),
+        }
+    )
+    return payload
+
+
+@app.route("/me", methods=["DELETE"])
+@jwt_required()
+@limiter.limit("5 per hour")
+def delete_my_account():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    data = request.get_json(silent=True) or {}
+    password = data.get("password") or ""
+    if not password:
+        return error_response("password is required")
+    if not bcrypt.check_password_hash(user.password, password):
+        return error_response("invalid password", 401)
+
+    if user.role == "owner":
+        owner_count = User.query.filter_by(org_id=user.org_id, role="owner").count()
+        if owner_count <= 1:
+            return error_response("create another owner before deleting this account", 400)
+
+    db.session.add(AuditLog(user_id=user.id, company_id=user.default_company_id, action="deleted own account"))
+    PasswordResetToken.query.filter_by(user_id=user.id).delete()
+    ActiveSession.query.filter_by(user_id=user.id).delete()
+    UserCompanyMembership.query.filter_by(user_id=user.id).delete()
+    db.session.delete(user)
+    if not safe_commit():
+        return error_response("database error while deleting account", 503)
+
+    return {"msg": "account deleted"}
 
 
 @app.route("/analytics")
@@ -6215,12 +7865,7 @@ def recent_activity():
 @roles_required("owner", "admin")
 def users():
     me = get_user_from_token()
-    return jsonify(
-        [
-            {"id": user.id, "email": user.email, "role": user.role}
-            for user in User.query.filter_by(org_id=me.org_id).order_by(User.id.asc())
-        ]
-    )
+    return jsonify([serialize_user(user) for user in User.query.filter_by(org_id=me.org_id).order_by(User.id.asc())])
 
 
 @app.route("/admin/users", methods=["POST"])
@@ -6243,13 +7888,32 @@ def create_user():
     if User.query.filter_by(email=email).first():
         return error_response("email already exists", 409)
 
+    fallback_company = resolve_company_for_user(me, data.get("company_id")) or resolve_company_for_user(me)
+    try:
+        membership_specs = normalize_membership_specs(
+            data.get("memberships"),
+            data.get("company_ids"),
+            fallback_company.id if fallback_company else None,
+            role,
+        )
+    except ValueError as exc:
+        return error_response(str(exc))
+
+    company_map = membership_company_map([spec["company_id"] for spec in membership_specs])
+    if len(company_map) != len(membership_specs) or any(company.org_id != me.org_id for company in company_map.values()):
+        return error_response("company not found", 404)
+
     hashed_password = bcrypt.generate_password_hash(password).decode()
-    db.session.add(User(email=email, password=hashed_password, role=role, org_id=me.org_id))
+    default_company_id = next((spec["company_id"] for spec in membership_specs if spec["is_default"]), membership_specs[0]["company_id"])
+    user = User(email=email, password=hashed_password, role=role, org_id=me.org_id, default_company_id=default_company_id)
+    db.session.add(user)
+    db.session.flush()
+    apply_user_company_memberships(user, membership_specs)
     if not safe_commit():
         return error_response("database error while creating user", 503)
 
     log(me.id, f"created user {email} with role {role}")
-    return {"msg": "user created"}, 201
+    return {"msg": "user created", "user": serialize_user(user)}, 201
 
 
 @app.route("/admin/users/<int:user_id>/role", methods=["PATCH"])
@@ -6268,13 +7932,56 @@ def update_user_role(user_id):
         return error_response("user not found", 404)
     if target.id == me.id and role not in {"owner", "admin"}:
         return error_response("cannot downgrade your own admin access", 400)
+    if target.role == "owner" and role != "owner":
+        owner_count = User.query.filter_by(org_id=me.org_id, role="owner").count()
+        if owner_count <= 1:
+            return error_response("create another owner before removing the final owner", 400)
 
     target.role = role
+    memberships = UserCompanyMembership.query.filter_by(user_id=target.id).all()
+    for membership in memberships:
+        membership.role = role
     if not safe_commit():
         return error_response("database error while updating role", 503)
 
     log(me.id, f"updated role for {target.email} to {role}")
     return {"msg": "role updated"}
+
+
+@app.route("/admin/users/<int:user_id>/companies", methods=["PUT"])
+@jwt_required()
+@roles_required("owner", "admin")
+@limiter.limit("20 per minute")
+def update_user_companies(user_id):
+    me = get_user_from_token()
+    target = User.query.filter_by(id=user_id, org_id=me.org_id).first()
+    if not target:
+        return error_response("user not found", 404)
+
+    data = request.get_json(silent=True) or {}
+    try:
+        membership_specs = normalize_membership_specs(
+            data.get("memberships"),
+            data.get("company_ids"),
+            parse_company_id(data.get("default_company_id")) or target.default_company_id or me.default_company_id,
+            target.role,
+        )
+    except ValueError as exc:
+        return error_response(str(exc))
+
+    company_map = membership_company_map([spec["company_id"] for spec in membership_specs])
+    if len(company_map) != len(membership_specs) or any(company.org_id != me.org_id for company in company_map.values()):
+        return error_response("company not found", 404)
+
+    try:
+        apply_user_company_memberships(target, membership_specs)
+    except ValueError as exc:
+        return error_response(str(exc))
+    if not safe_commit():
+        return error_response("database error while updating company access", 503)
+
+    log(me.id, f"updated company access for {target.email}")
+    return {"msg": "company access updated", "user": serialize_user(target)}
 
 
 @app.route("/admin/users/<int:user_id>", methods=["DELETE"])
@@ -6288,8 +7995,14 @@ def delete_user(user_id):
         return error_response("user not found", 404)
     if target.id == me.id:
         return error_response("cannot delete your own account", 400)
+    if target.role == "owner":
+        owner_count = User.query.filter_by(org_id=me.org_id, role="owner").count()
+        if owner_count <= 1:
+            return error_response("create another owner before deleting the final owner", 400)
 
     clear_session(target.id)
+    PasswordResetToken.query.filter_by(user_id=target.id).delete()
+    UserCompanyMembership.query.filter_by(user_id=target.id).delete()
     db.session.delete(target)
     if not safe_commit():
         return error_response("database error while deleting user", 503)

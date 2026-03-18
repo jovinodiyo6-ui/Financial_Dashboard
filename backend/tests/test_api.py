@@ -58,6 +58,28 @@ def register_and_login(client, email="owner@example.com", password="secret123", 
     return payload["token"]
 
 
+def upgrade_plan(client, headers, plan_code):
+    me_response = client.get("/me", headers=headers)
+    assert me_response.status_code == 200
+    org_id = me_response.get_json()["org_id"]
+    response = client.post(
+        "/billing/webhook",
+        json={
+            "type": "customer.subscription.updated",
+            "data": {
+                "object": {
+                    "id": f"sub_{plan_code}_test",
+                    "customer": f"cus_{plan_code}_test",
+                    "status": "active",
+                    "metadata": {"org_id": str(org_id), "plan_code": plan_code},
+                }
+            },
+        },
+    )
+    assert response.status_code == 200
+    assert response.get_json()["handled"] is True
+
+
 def test_register_and_login_success(client):
     token = register_and_login(client)
     assert token
@@ -78,6 +100,112 @@ def test_register_duplicate_email_conflict(client):
 
     assert duplicate_response.status_code == 409
     assert duplicate_response.get_json()["error"] == "email already exists"
+
+
+def test_password_reset_flow_updates_password(client):
+    register_and_login(client, email="reset@example.com", password="oldsecret123")
+
+    request_response = client.post(
+        "/password-reset/request",
+        json={"email": "reset@example.com"},
+    )
+
+    assert request_response.status_code == 200
+    request_payload = request_response.get_json()
+    assert request_payload["msg"].startswith("If an account exists")
+    assert request_payload["delivery"] == "preview"
+    assert "reset_token" in request_payload
+
+    confirm_response = client.post(
+        "/password-reset/confirm",
+        json={"token": request_payload["reset_token"], "password": "newsecret123"},
+    )
+
+    assert confirm_response.status_code == 200
+    assert "Password reset complete" in confirm_response.get_json()["msg"]
+
+    old_login_response = client.post(
+        "/login",
+        json={"email": "reset@example.com", "password": "oldsecret123"},
+    )
+    assert old_login_response.status_code == 401
+
+    new_login_response = client.post(
+        "/login",
+        json={"email": "reset@example.com", "password": "newsecret123"},
+    )
+    assert new_login_response.status_code == 200
+
+    reused_token_response = client.post(
+        "/password-reset/confirm",
+        json={"token": request_payload["reset_token"], "password": "anothersecret123"},
+    )
+    assert reused_token_response.status_code == 400
+    assert reused_token_response.get_json()["error"] == "invalid or expired reset token"
+
+
+def test_password_reset_request_is_generic_for_unknown_email(client):
+    response = client.post(
+        "/password-reset/request",
+        json={"email": "missing@example.com"},
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["msg"].startswith("If an account exists")
+    assert "reset_token" not in payload
+
+
+def test_member_can_delete_own_account(client):
+    owner_token = register_and_login(client, email="owner-delete@example.com", password="ownersecret123")
+    owner_headers = {"Authorization": f"Bearer {owner_token}"}
+
+    create_user_response = client.post(
+        "/admin/users",
+        headers=owner_headers,
+        json={
+            "email": "member-delete@example.com",
+            "password": "membersecret123",
+            "role": "member",
+        },
+    )
+    assert create_user_response.status_code == 201
+
+    member_login_response = client.post(
+        "/login",
+        json={"email": "member-delete@example.com", "password": "membersecret123"},
+    )
+    assert member_login_response.status_code == 200
+    member_token = member_login_response.get_json()["token"]
+    member_headers = {"Authorization": f"Bearer {member_token}"}
+
+    delete_response = client.delete(
+        "/me",
+        headers=member_headers,
+        json={"password": "membersecret123"},
+    )
+    assert delete_response.status_code == 200
+    assert delete_response.get_json()["msg"] == "account deleted"
+
+    relogin_response = client.post(
+        "/login",
+        json={"email": "member-delete@example.com", "password": "membersecret123"},
+    )
+    assert relogin_response.status_code == 401
+
+
+def test_last_owner_cannot_delete_own_account(client):
+    owner_token = register_and_login(client, email="only-owner@example.com", password="ownersecret123")
+    headers = {"Authorization": f"Bearer {owner_token}"}
+
+    delete_response = client.delete(
+        "/me",
+        headers=headers,
+        json={"password": "ownersecret123"},
+    )
+
+    assert delete_response.status_code == 400
+    assert delete_response.get_json()["error"] == "create another owner before deleting this account"
 
 
 def test_register_partnership_persists_partner_names(client):
@@ -569,6 +697,7 @@ def test_tax_profile_update_and_provider_status(client):
 def test_accounting_core_and_tax_filing_routes(client):
     token = register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}
+    upgrade_plan(client, headers, "pro")
 
     coa_response = client.get("/finance/chart-of-accounts", headers=headers)
     assert coa_response.status_code == 200
@@ -643,6 +772,7 @@ def test_accounting_core_and_tax_filing_routes(client):
 def test_vendor_billpay_reconciliation_rules_and_integrations(client):
     token = register_and_login(client)
     headers = {"Authorization": f"Bearer {token}"}
+    upgrade_plan(client, headers, "pro")
 
     vendor_response = client.post(
         "/finance/vendors",
@@ -943,3 +1073,233 @@ def test_workforce_inventory_projects_and_accountant_toolkit(client):
     assert toolkit_payload["inventory"]["inventory_value"] == 120.0
     assert toolkit_payload["projects"]["total_margin"] > 0
     assert toolkit_payload["workforce"]["employee_count"] == 1
+
+
+def test_billing_plan_limit_requires_upgrade_before_extra_company(client):
+    token = register_and_login(client, email="billing-owner@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    summary_response = client.get("/billing/summary", headers=headers)
+    assert summary_response.status_code == 200
+    summary_payload = summary_response.get_json()
+    assert summary_payload["plan_code"] == "free"
+    assert summary_payload["company_count"] == 1
+
+    blocked_response = client.post(
+        "/companies",
+        headers=headers,
+        json={"name": "Second Company", "business_type": "sole_proprietor"},
+    )
+    assert blocked_response.status_code == 403
+    assert "plan limit" in blocked_response.get_json()["error"]
+
+    me_response = client.get("/me", headers=headers)
+    assert me_response.status_code == 200
+    org_id = me_response.get_json()["org_id"]
+
+    webhook_response = client.post(
+        "/billing/webhook",
+        json={
+            "type": "customer.subscription.updated",
+            "data": {
+                "object": {
+                    "id": "sub_pro_001",
+                    "customer": "cus_pro_001",
+                    "status": "active",
+                    "metadata": {"org_id": str(org_id), "plan_code": "pro"},
+                }
+            },
+        },
+    )
+    assert webhook_response.status_code == 200
+    assert webhook_response.get_json()["handled"] is True
+
+    upgraded_summary_response = client.get("/billing/summary", headers=headers)
+    assert upgraded_summary_response.status_code == 200
+    upgraded_summary = upgraded_summary_response.get_json()
+    assert upgraded_summary["plan_code"] == "pro"
+    assert upgraded_summary["max_companies"] == 5
+
+    created_response = client.post(
+        "/companies",
+        headers=headers,
+        json={"name": "Second Company", "business_type": "sole_proprietor"},
+    )
+    assert created_response.status_code == 201
+    assert created_response.get_json()["name"] == "Second Company"
+
+
+def test_company_memberships_scope_company_visibility_and_access(client):
+    owner_token = register_and_login(client, email="tenant-owner@example.com")
+    owner_headers = {"Authorization": f"Bearer {owner_token}"}
+    me_response = client.get("/me", headers=owner_headers)
+    assert me_response.status_code == 200
+    me_payload = me_response.get_json()
+    org_id = me_payload["org_id"]
+    default_company_id = me_payload["default_company_id"]
+
+    upgrade_response = client.post(
+        "/billing/webhook",
+        json={
+            "type": "customer.subscription.updated",
+            "data": {
+                "object": {
+                    "id": "sub_scope_001",
+                    "customer": "cus_scope_001",
+                    "status": "active",
+                    "metadata": {"org_id": str(org_id), "plan_code": "pro"},
+                }
+            },
+        },
+    )
+    assert upgrade_response.status_code == 200
+
+    create_company_response = client.post(
+        "/companies",
+        headers=owner_headers,
+        json={"name": "Factory Branch", "business_type": "manufacturing"},
+    )
+    assert create_company_response.status_code == 201
+    second_company_id = create_company_response.get_json()["id"]
+
+    companies_response = client.get("/companies", headers=owner_headers)
+    assert companies_response.status_code == 200
+    assert len(companies_response.get_json()) == 2
+
+    create_user_response = client.post(
+        "/admin/users",
+        headers=owner_headers,
+        json={
+            "email": "scoped-member@example.com",
+            "password": "membersecret123",
+            "role": "member",
+            "company_ids": [default_company_id],
+        },
+    )
+    assert create_user_response.status_code == 201
+    created_user = create_user_response.get_json()["user"]
+    assert created_user["memberships"][0]["company_id"] == default_company_id
+
+    member_login_response = client.post(
+        "/login",
+        json={"email": "scoped-member@example.com", "password": "membersecret123"},
+    )
+    assert member_login_response.status_code == 200
+    member_headers = {"Authorization": f"Bearer {member_login_response.get_json()['token']}"}
+
+    member_companies_response = client.get("/companies", headers=member_headers)
+    assert member_companies_response.status_code == 200
+    member_companies = member_companies_response.get_json()
+    assert len(member_companies) == 1
+    assert member_companies[0]["id"] == default_company_id
+
+    forbidden_summary_response = client.get(
+        f"/finance/summary?company_id={second_company_id}",
+        headers=member_headers,
+    )
+    assert forbidden_summary_response.status_code == 404
+
+
+def test_background_jobs_and_ai_cfo_routes(client):
+    token = register_and_login(client, email="aicfo-owner@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    upgrade_plan(client, headers, "pro")
+
+    capital_response = client.post(
+        "/finance/journal-entries",
+        headers=headers,
+        json={
+            "memo": "Initial capital",
+            "entry_date": "2026-03-18",
+            "reference": "CAP-AI-1",
+            "lines": [
+                {"account_code": "1000", "debit": 1000, "credit": 0},
+                {"account_code": "3000", "debit": 0, "credit": 1000},
+            ],
+        },
+    )
+    assert capital_response.status_code == 201
+
+    overview_response = client.get("/ai-cfo/overview", headers=headers)
+    assert overview_response.status_code == 200
+    overview_payload = overview_response.get_json()
+    assert overview_payload["metrics"]["cash_balance"] == 1000.0
+    assert "forecast" in overview_payload
+    assert "alerts" in overview_payload
+
+    job_response = client.post(
+        "/ops/jobs",
+        headers=headers,
+        json={"job_type": "finance_digest"},
+    )
+    assert job_response.status_code == 201
+    job_payload = job_response.get_json()
+    assert job_payload["status"] == "completed"
+    assert job_payload["result"]["metrics"]["cash_balance"] == 1000.0
+
+    me_response = client.get("/me", headers=headers)
+    assert me_response.status_code == 200
+    org_id = me_response.get_json()["org_id"]
+
+    upgrade_response = client.post(
+        "/billing/webhook",
+        json={
+            "type": "customer.subscription.updated",
+            "data": {
+                "object": {
+                    "id": "sub_ai_001",
+                    "customer": "cus_ai_001",
+                    "status": "active",
+                    "metadata": {"org_id": str(org_id), "plan_code": "ai"},
+                }
+            },
+        },
+    )
+    assert upgrade_response.status_code == 200
+
+    answer_response = client.post(
+        "/ai-cfo/ask",
+        headers=headers,
+        json={"question": "How is my cash runway?"},
+    )
+    assert answer_response.status_code == 200
+    answer_payload = answer_response.get_json()
+    assert "runway" in answer_payload["answer"].lower()
+    assert answer_payload["top_actions"] is not None
+
+
+def test_mpesa_checkout_preview_mode(client):
+    token = register_and_login(client, email="mpesa-owner@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    response = client.post(
+        "/billing/mpesa/checkout",
+        headers=headers,
+        json={"plan_code": "pro", "phone_number": "0712345678"},
+    )
+
+    assert response.status_code == 201
+    payload = response.get_json()
+    assert payload["provider"] == "mpesa"
+    assert payload["plan_code"] == "pro"
+    assert payload["status"] == "preview"
+    assert payload["phone_number"] == "254712345678"
+
+
+def test_free_plan_blocks_pro_only_operations(client):
+    token = register_and_login(client, email="starter-owner@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    response = client.post(
+        "/finance/reconciliation/rules",
+        headers=headers,
+        json={
+            "name": "Fees",
+            "keyword": "bank",
+            "direction": "outflow",
+            "auto_action": "flag_exception",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.get_json()["error"] == "Pro plan required"

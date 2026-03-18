@@ -7,4 +7,7 @@ spec = importlib.util.spec_from_file_location("financial_dashboard_backend", bac
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
+with module.app.app_context():
+    module.run_schema_compatibility_sync()
+
 app = module.app

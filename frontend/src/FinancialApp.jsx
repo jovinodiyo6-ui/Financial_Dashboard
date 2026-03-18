@@ -116,6 +116,35 @@ const persistWorkspace = (companyId, workspace) => {
   }
 };
 
+const readAuthSearchParams = () => {
+  if (typeof window === "undefined") {
+    return new URLSearchParams();
+  }
+  return new URLSearchParams(window.location.search);
+};
+
+const readInitialAuthMode = () => {
+  const params = readAuthSearchParams();
+  return params.get("auth") === "reset" || params.get("token") ? "reset" : "login";
+};
+
+const readResetTokenFromLocation = () => readAuthSearchParams().get("token") || "";
+
+const updatePasswordResetLocation = (token = "") => {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const url = new URL(window.location.href);
+  if (token) {
+    url.searchParams.set("auth", "reset");
+    url.searchParams.set("token", token);
+  } else {
+    url.searchParams.delete("auth");
+    url.searchParams.delete("token");
+  }
+  window.history.replaceState({}, "", url.toString());
+};
+
 const BUSINESS_TYPE_OPTIONS = [
   {
     value: "sole_proprietor",
@@ -377,8 +406,38 @@ const normalizeAccountKey = (value) =>
 const formatMoney = (value) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value || 0);
 
+const formatKes = (value) =>
+  new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES", maximumFractionDigits: 0 }).format(value || 0);
+
 const formatPercent = (value) =>
   `${((Number.isFinite(value) ? value : 0) * 100).toFixed(1)}%`;
+
+const MARKETING_PLANS = [
+  {
+    code: "free",
+    label: "Free",
+    usd: "$0",
+    kes: "KES 0",
+    summary: "For students, freelancers, and first-time founders getting their books under control.",
+    features: ["1 company", "income & expense tracking", "simple dashboard", "manual entries"],
+  },
+  {
+    code: "pro",
+    label: "Pro",
+    usd: "$20/mo",
+    kes: "KES 900/mo",
+    summary: "For serious small businesses that need a finance control tower, exports, and workflow automation.",
+    features: ["scenario planner", "exports", "tax, AP/AR, and operations hub", "multi-company growth path"],
+  },
+  {
+    code: "ai",
+    label: "AI CFO",
+    usd: "$50/mo",
+    kes: "KES 1,500/mo",
+    summary: "For owners who want proactive alerts, cash forecasting, and chat-with-your-business guidance.",
+    features: ["AI alerts", "cash runway forecasting", "chat with your business", "recommended next actions"],
+  },
+];
 
 const INITIAL_BUDGET_TARGETS = {
   revenue: 0,
@@ -835,7 +894,12 @@ export default function App() {
   const [registerEmail, setRegisterEmail] = useState("");
   const [registerPassword, setRegisterPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [authMode, setAuthMode] = useState("login");
+  const [resetRequestEmail, setResetRequestEmail] = useState(() => readStoredEmail());
+  const [resetToken, setResetToken] = useState(() => readResetTokenFromLocation());
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetConfirmPassword, setResetConfirmPassword] = useState("");
+  const [resetPreviewLink, setResetPreviewLink] = useState("");
+  const [authMode, setAuthMode] = useState(() => readInitialAuthMode());
   const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [showSignupPassword, setShowSignupPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
@@ -897,6 +961,15 @@ export default function App() {
   const [recentActivity, setRecentActivity] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
   const [adminUsers, setAdminUsers] = useState([]);
+  const [billingPlans, setBillingPlans] = useState([]);
+  const [billingSummaryData, setBillingSummaryData] = useState(null);
+  const [billingLoading, setBillingLoading] = useState(false);
+  const [mpesaPhoneNumber, setMpesaPhoneNumber] = useState("");
+  const [mpesaCheckout, setMpesaCheckout] = useState(null);
+  const [aiCfoOverviewData, setAiCfoOverviewData] = useState(null);
+  const [aiCfoQuestion, setAiCfoQuestion] = useState("");
+  const [aiCfoAnswer, setAiCfoAnswer] = useState(null);
+  const [aiCfoLoading, setAiCfoLoading] = useState(false);
   const [adminEmail, setAdminEmail] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
   const [adminRole, setAdminRole] = useState("cashier");
@@ -973,6 +1046,9 @@ export default function App() {
     [companies, selectedCompanyId],
   );
   const needsCompanySetup = Boolean(selectedCompany && !selectedCompany.onboarding_complete);
+  const currentPlanCode = currentUser?.subscription?.plan_code || billingSummaryData?.plan_code || "free";
+  const hasProPlan = currentPlanCode === "pro" || currentPlanCode === "ai";
+  const hasAiPlan = currentPlanCode === "ai";
   const canConfigureCompany = ["owner", "admin"].includes(currentUser?.role || "");
   const canManageFinanceOps = ["owner", "admin", "manager", "accountant", "cashier"].includes(currentUser?.role || "");
   const canManagePayables = ["owner", "admin", "manager", "accountant"].includes(currentUser?.role || "");
@@ -1464,6 +1540,24 @@ export default function App() {
   const buildCompanyQuery = (companyId = selectedCompanyId) =>
     companyId ? `?company_id=${encodeURIComponent(companyId)}` : "";
 
+  const switchAuthMode = (nextMode) => {
+    if (nextMode !== "reset") {
+      updatePasswordResetLocation("");
+    }
+    setAuthMode(nextMode);
+    setErrorMessage("");
+    setInfoMessage("");
+  };
+
+  const openForgotPassword = () => {
+    setResetRequestEmail((email || registerEmail || readStoredEmail()).trim());
+    setResetPreviewLink("");
+    setResetToken("");
+    setResetPassword("");
+    setResetConfirmPassword("");
+    switchAuthMode("forgot");
+  };
+
   const login = async () => {
     setErrorMessage("");
     setInfoMessage("");
@@ -1486,6 +1580,11 @@ export default function App() {
         throw new Error(data.error || "Login failed");
       }
 
+      updatePasswordResetLocation("");
+      setResetPreviewLink("");
+      setResetToken("");
+      setResetPassword("");
+      setResetConfirmPassword("");
       setToken(data.token);
       if (rememberMe) {
         persistToken(data.token);
@@ -1511,6 +1610,95 @@ export default function App() {
     }
 
     return trimmedNames;
+  };
+
+  const requestPasswordReset = async () => {
+    setErrorMessage("");
+    setInfoMessage("");
+
+    if (!resetRequestEmail.trim()) {
+      setErrorMessage("Email is required.");
+      return;
+    }
+
+    setAuthLoading(true);
+    try {
+      const normalizedEmail = resetRequestEmail.trim().toLowerCase();
+      const response = await fetch(`${API_URL}/password-reset/request`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: normalizedEmail }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to request password reset");
+      }
+
+      persistEmail(normalizedEmail);
+      setResetRequestEmail(normalizedEmail);
+      setEmail(normalizedEmail);
+
+      if (data.reset_token) {
+        setResetToken(data.reset_token);
+        setResetPreviewLink(data.reset_link || "");
+        updatePasswordResetLocation(data.reset_token);
+        setAuthMode("reset");
+        setInfoMessage("Reset link prepared in preview mode. Enter your new password below.");
+      } else {
+        setResetPreviewLink("");
+        setInfoMessage(data.msg || "If your account exists, check your email for reset instructions.");
+      }
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to request password reset");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const submitPasswordReset = async () => {
+    setErrorMessage("");
+    setInfoMessage("");
+
+    if (!resetToken.trim() || !resetPassword) {
+      setErrorMessage("Reset token and new password are required.");
+      return;
+    }
+
+    if (resetPassword !== resetConfirmPassword) {
+      setErrorMessage("Passwords do not match.");
+      return;
+    }
+
+    setAuthLoading(true);
+    try {
+      const response = await fetch(`${API_URL}/password-reset/confirm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          token: resetToken.trim(),
+          password: resetPassword,
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to reset password");
+      }
+
+      setPassword("");
+      setResetPassword("");
+      setResetConfirmPassword("");
+      setResetPreviewLink("");
+      setResetToken("");
+      updatePasswordResetLocation("");
+      setAuthMode("login");
+      setInfoMessage(data.msg || "Password reset complete. Sign in with your new password.");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to reset password");
+    } finally {
+      setAuthLoading(false);
+    }
   };
 
   const register = async () => {
@@ -1556,7 +1744,7 @@ export default function App() {
       setRegisterEmail("");
       setRegisterPassword("");
       setConfirmPassword("");
-      setAuthMode("login");
+      switchAuthMode("login");
       setInfoMessage("Registration complete. Sign in with the same credentials.");
     } catch (error) {
       setErrorMessage(error.message || "Registration failed");
@@ -1615,6 +1803,13 @@ export default function App() {
     setUserCount(0);
     setCurrentUser(null);
     setAdminUsers([]);
+    setBillingPlans([]);
+    setBillingSummaryData(null);
+    setMpesaPhoneNumber("");
+    setMpesaCheckout(null);
+    setAiCfoOverviewData(null);
+    setAiCfoQuestion("");
+    setAiCfoAnswer(null);
     setFile(null);
     setBankFeedFile(null);
     setPlaidLinkToken("");
@@ -1635,6 +1830,11 @@ export default function App() {
     setProjectCostForm(createProjectCostFormState());
     setIntegrationForm(createIntegrationFormState());
     setSelectedRegisterAccountId("");
+    setResetPreviewLink("");
+    setResetToken("");
+    setResetPassword("");
+    setResetConfirmPassword("");
+    updatePasswordResetLocation("");
     setLedgerRows(INITIAL_LEDGER_ROWS);
     setBudgetTargets(INITIAL_BUDGET_TARGETS);
     setManufacturingInputs(INITIAL_MANUFACTURING_INPUTS);
@@ -1660,6 +1860,35 @@ export default function App() {
     const data = await authorizedFetch("/me");
     setCurrentUser(data);
     return data;
+  };
+
+  const loadBillingCenter = async () => {
+    try {
+      const [plansPayload, summaryPayload] = await Promise.all([
+        authorizedFetch("/billing/plans"),
+        authorizedFetch("/billing/summary"),
+      ]);
+      setBillingPlans(Array.isArray(plansPayload.items) ? plansPayload.items : []);
+      setBillingSummaryData(summaryPayload || null);
+    } catch {
+      setBillingPlans([]);
+      setBillingSummaryData(null);
+    }
+  };
+
+  const loadAiCfoOverview = async (companyId = selectedCompanyId) => {
+    if (!companyId) {
+      setAiCfoOverviewData(null);
+      return null;
+    }
+    try {
+      const payload = await authorizedFetch(`/ai-cfo/overview${buildCompanyQuery(companyId)}`);
+      setAiCfoOverviewData(payload);
+      return payload;
+    } catch {
+      setAiCfoOverviewData(null);
+      return null;
+    }
   };
 
   const loadCompanies = async (defaultCompanyId) => {
@@ -1725,6 +1954,100 @@ export default function App() {
       setAdminUsers(Array.isArray(users) ? users : []);
     } catch {
       setAdminUsers([]);
+    }
+  };
+
+  const startStripeCheckout = async (planCode) => {
+    setErrorMessage("");
+    setInfoMessage("");
+    setBillingLoading(true);
+    try {
+      const response = await authorizedFetch("/billing/checkout-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          plan_code: planCode,
+          success_url: `${window.location.origin}${window.location.pathname}?billing=success`,
+          cancel_url: `${window.location.origin}${window.location.pathname}?billing=cancelled`,
+        }),
+      });
+      if (response.checkout_url) {
+        window.location.assign(response.checkout_url);
+        return;
+      }
+      throw new Error("Stripe checkout link was not returned.");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to start Stripe checkout.");
+    } finally {
+      setBillingLoading(false);
+    }
+  };
+
+  const startMpesaCheckout = async (planCode) => {
+    setErrorMessage("");
+    setInfoMessage("");
+    if (!mpesaPhoneNumber.trim()) {
+      setErrorMessage("Enter a Kenya mobile number for M-Pesa checkout.");
+      return;
+    }
+
+    setBillingLoading(true);
+    try {
+      const response = await authorizedFetch("/billing/mpesa/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          plan_code: planCode,
+          phone_number: mpesaPhoneNumber.trim(),
+          company_id: selectedCompanyId || undefined,
+        }),
+      });
+      setMpesaCheckout(response);
+      setInfoMessage(response.customer_message || "M-Pesa request prepared.");
+      await Promise.all([loadCurrentUser(), loadBillingCenter()]);
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to start M-Pesa checkout.");
+    } finally {
+      setBillingLoading(false);
+    }
+  };
+
+  const refreshMpesaCheckout = async () => {
+    if (!mpesaCheckout?.id) {
+      return;
+    }
+    try {
+      const response = await authorizedFetch(`/billing/mpesa/requests/${mpesaCheckout.id}`);
+      setMpesaCheckout(response);
+      await Promise.all([loadCurrentUser(), loadBillingCenter()]);
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to refresh M-Pesa payment status.");
+    }
+  };
+
+  const askAiCfo = async () => {
+    setErrorMessage("");
+    setInfoMessage("");
+    if (!aiCfoQuestion.trim()) {
+      setErrorMessage("Ask a question first.");
+      return;
+    }
+
+    setAiCfoLoading(true);
+    try {
+      const response = await authorizedFetch("/ai-cfo/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          company_id: selectedCompanyId || undefined,
+          question: aiCfoQuestion.trim(),
+        }),
+      });
+      setAiCfoAnswer(response);
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to get an AI CFO response.");
+    } finally {
+      setAiCfoLoading(false);
     }
   };
 
@@ -3215,6 +3538,7 @@ export default function App() {
           email: adminEmail.trim().toLowerCase(),
           password: adminPassword,
           role: adminRole,
+          company_ids: selectedCompanyId ? [selectedCompanyId] : undefined,
         }),
       });
       setAdminEmail("");
@@ -3248,6 +3572,42 @@ export default function App() {
       setInfoMessage("User deleted.");
     } catch (error) {
       setErrorMessage(error.message || "Failed to delete user.");
+    }
+  };
+
+  const deleteOwnAccount = async () => {
+    setErrorMessage("");
+    setInfoMessage("");
+
+    const confirmed = window.confirm(
+      "Delete your account? This will sign you out immediately and cannot be undone.",
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    const confirmationText = window.prompt("Type DELETE to confirm account deletion.");
+    if (confirmationText !== "DELETE") {
+      setErrorMessage("Account deletion cancelled.");
+      return;
+    }
+
+    const passwordConfirmation = window.prompt("Enter your password to delete your account.");
+    if (!passwordConfirmation) {
+      setErrorMessage("Password confirmation is required to delete your account.");
+      return;
+    }
+
+    try {
+      const response = await authorizedFetch("/me", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: passwordConfirmation }),
+      });
+      await logout();
+      setInfoMessage(response.msg || "Your account has been deleted.");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to delete your account.");
     }
   };
 
@@ -3325,6 +3685,9 @@ export default function App() {
       sidebarMeta: { ...styles.sidebarMeta, color: "#93c5fd" },
       main: { ...styles.main, background: "#111827", color: "#e5e7eb" },
       card: { ...styles.card, background: "#1f2937", color: "#e5e7eb", boxShadow: "0 8px 20px rgba(0,0,0,0.3)" },
+      landingStoryPanel: { ...styles.landingStoryPanel, background: "linear-gradient(160deg, rgba(2, 6, 23, 0.88) 0%, rgba(15, 118, 110, 0.88) 100%)", border: "1px solid rgba(148, 163, 184, 0.2)" },
+      landingAudienceCard: { ...styles.landingAudienceCard, background: "rgba(15, 23, 42, 0.42)", border: "1px solid rgba(148, 163, 184, 0.18)", color: "#e2e8f0" },
+      pricingCard: { ...styles.pricingCard, background: "#0f172a", border: "1px solid #334155", color: "#e2e8f0" },
       heroCard: { ...styles.heroCard, background: "linear-gradient(145deg, #020617 0%, #0f766e 45%, #164e63 120%)" },
       heroMetricCard: {
         ...styles.heroMetricCard,
@@ -3378,6 +3741,34 @@ export default function App() {
   }, [isDarkMode]);
 
   useEffect(() => {
+    const incomingResetToken = readResetTokenFromLocation();
+    if (!incomingResetToken) {
+      return;
+    }
+    setAuthMode("reset");
+    setResetToken(incomingResetToken);
+    setInfoMessage("Enter your new password to complete the reset.");
+  }, []);
+
+  useEffect(() => {
+    const params = readAuthSearchParams();
+    const billingState = params.get("billing");
+    if (!billingState) {
+      return;
+    }
+    if (billingState === "success") {
+      setInfoMessage("Billing checkout completed. Refreshing your plan details.");
+    } else if (billingState === "cancelled") {
+      setInfoMessage("Billing checkout was cancelled.");
+    }
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("billing");
+      window.history.replaceState({}, "", url.toString());
+    }
+  }, []);
+
+  useEffect(() => {
     if (!token) {
       return;
     }
@@ -3392,6 +3783,7 @@ export default function App() {
           loadStats(),
           loadLiveUserCount(),
           loadRecentActivity(),
+          loadBillingCenter(),
           pingSession(),
         ]);
         if (me?.role === "owner" || me?.role === "admin") {
@@ -3437,6 +3829,8 @@ export default function App() {
     const savedWorkspace = readStoredWorkspace(selectedCompany.id);
     const nextBusinessType = selectedCompany.business_type || savedWorkspace?.businessType || "sole_proprietor";
     setBusinessType(nextBusinessType);
+    setAiCfoAnswer(null);
+    setAiCfoQuestion("");
     setLedgerRows(normalizeLedgerRows(savedWorkspace?.ledgerRows, nextBusinessType));
     setBudgetTargets(savedWorkspace?.budgetTargets || INITIAL_BUDGET_TARGETS);
     setManufacturingInputs(savedWorkspace?.manufacturingInputs || INITIAL_MANUFACTURING_INPUTS);
@@ -3446,6 +3840,7 @@ export default function App() {
     setWorkspaceReady(true);
     loadDashboardStats(selectedCompany.id).catch(() => {});
     loadFinanceWorkspace(selectedCompany.id).catch(() => {});
+    loadAiCfoOverview(selectedCompany.id).catch(() => {});
   }, [selectedCompany]);
 
   useEffect(() => {
@@ -3474,8 +3869,58 @@ export default function App() {
   if (!token) {
     return (
       <div style={themedStyles.center}>
+        <div style={themedStyles.landingShell}>
+          <div style={themedStyles.landingStoryPanel}>
+            <span style={themedStyles.landingBadge}>Built for small businesses and students</span>
+            <h1 style={themedStyles.landingHeadline}>Accounting that grows from survival tool to AI finance copilot.</h1>
+            <p style={themedStyles.landingLead}>
+              Win revenue with dukas, freelancers, Instagram sellers, and WhatsApp merchants. Win growth with CPA and business students who practice daily and become tomorrow&apos;s paying customers.
+            </p>
+            <div style={themedStyles.landingAudienceGrid}>
+              <div style={themedStyles.landingAudienceCard}>
+                <strong>Revenue Engine</strong>
+                <div style={themedStyles.updateIndicator}>Simple accounting, stress-free reporting, and mobile-ready workflows for real small businesses.</div>
+              </div>
+              <div style={themedStyles.landingAudienceCard}>
+                <strong>Growth Engine</strong>
+                <div style={themedStyles.updateIndicator}>Students get a practical workspace to learn sole trader, partnership, and manufacturing logic in one app.</div>
+              </div>
+            </div>
+            <div style={themedStyles.pricingGrid}>
+              {MARKETING_PLANS.map((plan) => (
+                <div key={`landing-${plan.code}`} style={themedStyles.pricingCard}>
+                  <strong>{plan.label}</strong>
+                  <div style={themedStyles.pricingAmount}>{plan.usd}</div>
+                  <div style={themedStyles.pricingAmountSubtle}>{plan.kes}</div>
+                  <div style={themedStyles.updateIndicator}>{plan.summary}</div>
+                  <ul style={themedStyles.landingFeatureList}>
+                    {plan.features.map((feature) => <li key={`${plan.code}-${feature}`}>{feature}</li>)}
+                  </ul>
+                  <button
+                    type="button"
+                    onClick={() => switchAuthMode(plan.code === "free" ? "signup" : "signup")}
+                    style={plan.code === "free" ? themedStyles.button : themedStyles.secondaryActionButton}
+                  >
+                    {plan.code === "free" ? "Start Free" : `Choose ${plan.label}`}
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div style={themedStyles.landingActionRow}>
+              <button type="button" onClick={() => switchAuthMode("signup")} style={themedStyles.button}>Create Free Account</button>
+              <button type="button" onClick={() => switchAuthMode("login")} style={themedStyles.secondaryActionButton}>I already have an account</button>
+            </div>
+          </div>
         <div style={themedStyles.authSingleCard}>
-          <h2 style={themedStyles.authTitle}>{authMode === "login" ? "Login" : "Signup"}</h2>
+          <h2 style={themedStyles.authTitle}>
+            {authMode === "login"
+              ? "Login"
+              : authMode === "signup"
+                ? "Signup"
+                : authMode === "forgot"
+                  ? "Reset Password"
+                  : "Set New Password"}
+          </h2>
           <button type="button" onClick={toggleTheme} style={themedStyles.themeToggle}>
             Switch to {isDarkMode ? "Light" : "Dark"} Mode
           </button>
@@ -3516,7 +3961,7 @@ export default function App() {
                 <button
                   type="button"
                   style={themedStyles.linkButton}
-                  onClick={() => setInfoMessage("Password reset flow can be added next.")}
+                  onClick={openForgotPassword}
                 >
                   Forgot Password?
                 </button>
@@ -3529,17 +3974,13 @@ export default function App() {
                 <button
                   type="button"
                   style={themedStyles.inlineLink}
-                  onClick={() => {
-                    setAuthMode("signup");
-                    setErrorMessage("");
-                    setInfoMessage("");
-                  }}
+                  onClick={() => switchAuthMode("signup")}
                 >
                   Signup
                 </button>
               </p>
             </>
-          ) : (
+          ) : authMode === "signup" ? (
             <>
               <input
                 placeholder="Email"
@@ -3593,11 +4034,113 @@ export default function App() {
                 <button
                   type="button"
                   style={themedStyles.inlineLink}
-                  onClick={() => {
-                    setAuthMode("login");
-                    setErrorMessage("");
-                    setInfoMessage("");
-                  }}
+                  onClick={() => switchAuthMode("login")}
+                >
+                  Login
+                </button>
+              </p>
+            </>
+          ) : authMode === "forgot" ? (
+            <>
+              <p style={themedStyles.graphNote}>
+                Enter your email and we&apos;ll prepare a secure password reset link. If email delivery is not configured, development preview mode will show the reset token here.
+              </p>
+              <input
+                placeholder="Email"
+                value={resetRequestEmail}
+                onChange={(event) => setResetRequestEmail(event.target.value)}
+                style={themedStyles.authInput}
+              />
+              <button onClick={requestPasswordReset} style={themedStyles.authPrimaryButton} disabled={authLoading}>
+                {authLoading ? "Preparing..." : "Send Reset Link"}
+              </button>
+              <p style={themedStyles.authSwitchText}>
+                Already have a reset token?{" "}
+                <button
+                  type="button"
+                  style={themedStyles.inlineLink}
+                  onClick={() => switchAuthMode("reset")}
+                >
+                  Enter New Password
+                </button>
+              </p>
+              <p style={themedStyles.authSwitchText}>
+                Remembered your password?{" "}
+                <button
+                  type="button"
+                  style={themedStyles.inlineLink}
+                  onClick={() => switchAuthMode("login")}
+                >
+                  Back to Login
+                </button>
+              </p>
+            </>
+          ) : (
+            <>
+              <p style={themedStyles.graphNote}>
+                Paste your reset token or open the reset link you received, then choose a new password.
+              </p>
+              <input
+                placeholder="Reset token"
+                value={resetToken}
+                onChange={(event) => {
+                  const nextToken = event.target.value;
+                  setResetToken(nextToken);
+                  updatePasswordResetLocation(nextToken.trim());
+                }}
+                style={themedStyles.authInput}
+              />
+              <div style={themedStyles.passwordWrap}>
+                <input
+                  placeholder="New password"
+                  type={showSignupPassword ? "text" : "password"}
+                  value={resetPassword}
+                  onChange={(event) => setResetPassword(event.target.value)}
+                  style={themedStyles.authInput}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowSignupPassword((value) => !value)}
+                  style={themedStyles.eyeToggle}
+                >
+                  {showSignupPassword ? "Hide" : "Show"}
+                </button>
+              </div>
+              <div style={themedStyles.passwordWrap}>
+                <input
+                  placeholder="Confirm new password"
+                  type={showConfirmPassword ? "text" : "password"}
+                  value={resetConfirmPassword}
+                  onChange={(event) => setResetConfirmPassword(event.target.value)}
+                  style={themedStyles.authInput}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowConfirmPassword((value) => !value)}
+                  style={themedStyles.eyeToggle}
+                >
+                  {showConfirmPassword ? "Hide" : "Show"}
+                </button>
+              </div>
+              <button onClick={submitPasswordReset} style={themedStyles.authPrimaryButton} disabled={authLoading}>
+                {authLoading ? "Resetting..." : "Update Password"}
+              </button>
+              <p style={themedStyles.authSwitchText}>
+                Need a new reset link?{" "}
+                <button
+                  type="button"
+                  style={themedStyles.inlineLink}
+                  onClick={openForgotPassword}
+                >
+                  Request Again
+                </button>
+              </p>
+              <p style={themedStyles.authSwitchText}>
+                Back to login?{" "}
+                <button
+                  type="button"
+                  style={themedStyles.inlineLink}
+                  onClick={() => switchAuthMode("login")}
                 >
                   Login
                 </button>
@@ -3605,10 +4148,17 @@ export default function App() {
             </>
           )}
         </div>
+        </div>
 
         {maintenance.maintenance ? <p style={themedStyles.warningText}>{maintenance.message}</p> : null}
         {errorMessage ? <p style={themedStyles.errorText}>{errorMessage}</p> : null}
         {infoMessage ? <p style={themedStyles.infoText}>{infoMessage}</p> : null}
+        {resetPreviewLink ? (
+          <div style={{ ...themedStyles.card, maxWidth: 540 }}>
+            <p style={themedStyles.graphNote}>Development preview reset link</p>
+            <input value={resetPreviewLink} readOnly style={themedStyles.authInput} />
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -3631,6 +4181,8 @@ export default function App() {
         <h2>Financial Analytics Platform</h2>
         <p style={themedStyles.sidebarMeta}>{currentUser?.email || "User"}</p>
         <p style={themedStyles.sidebarMeta}>Role: {currentUser?.role || "member"}</p>
+        <p style={themedStyles.sidebarMeta}>Plan: {currentUser?.subscription?.plan_label || "Starter"}</p>
+        <p style={themedStyles.sidebarMeta}>Companies: {currentUser?.accessible_company_count || companies.length || 0}</p>
         <p>Dashboard</p>
         <p>Reports</p>
         <p>Statements</p>
@@ -3638,7 +4190,12 @@ export default function App() {
         <button onClick={toggleTheme} style={themedStyles.secondaryButton}>
           {isDarkMode ? "Light Mode" : "Dark Mode"}
         </button>
-        <button onClick={logout} style={themedStyles.secondaryButton}>Logout</button>
+        <div style={themedStyles.actionRow}>
+          <button onClick={logout} style={{ ...themedStyles.secondaryButton, marginTop: 0 }}>Logout</button>
+          <button onClick={deleteOwnAccount} style={{ ...themedStyles.deleteButton, padding: "10px 16px", borderRadius: 8 }}>
+            Delete Account
+          </button>
+        </div>
       </div>
 
       <div style={themedStyles.main} className="main">
@@ -3725,8 +4282,22 @@ export default function App() {
               </p>
             </div>
             <div style={themedStyles.heroActions}>
-              <button onClick={exportExecutiveSummary} style={themedStyles.button}>Export Summary CSV</button>
-              <button onClick={exportWorkspace} style={themedStyles.secondaryActionButton}>Export Workspace JSON</button>
+              <button
+                onClick={exportExecutiveSummary}
+                style={themedStyles.button}
+                disabled={!hasProPlan}
+                title={!hasProPlan ? "Upgrade to Pro to export reports." : "Export executive summary"}
+              >
+                Export Summary CSV
+              </button>
+              <button
+                onClick={exportWorkspace}
+                style={themedStyles.secondaryActionButton}
+                disabled={!hasProPlan}
+                title={!hasProPlan ? "Upgrade to Pro to export workspace data." : "Export workspace"}
+              >
+                Export Workspace JSON
+              </button>
             </div>
           </div>
           <div style={themedStyles.heroMetricsGrid}>
@@ -3789,6 +4360,106 @@ export default function App() {
             <div style={themedStyles.kpiItem}>Expenses: {formatMoney(dashboardStats?.expenses || 0)}</div>
             <div style={themedStyles.kpiItem}>Profit: {formatMoney(dashboardStats?.profit || 0)}</div>
             <div style={themedStyles.kpiItem}>Inventory: {formatMoney(dashboardStats?.inventory_value || 0)}</div>
+          </div>
+        </div>
+
+        <div style={themedStyles.card}>
+          <div style={themedStyles.statementHeader}>
+            <div>
+              <h3>Growth and Billing Engine</h3>
+              <p style={themedStyles.graphNote}>Free attracts students and early-stage users. Pro unlocks the operating system. AI CFO adds proactive finance guidance.</p>
+            </div>
+            <div style={themedStyles.scoreBadge}>{(billingSummaryData?.plan_label || currentUser?.subscription?.plan_label || "Starter").slice(0, 8)}</div>
+          </div>
+          <div style={themedStyles.kpiGrid}>
+            <div style={themedStyles.kpiItem}>
+              <strong>Current Plan</strong>
+              <div>{billingSummaryData?.plan_label || currentUser?.subscription?.plan_label || "Starter"}</div>
+            </div>
+            <div style={themedStyles.kpiItem}>
+              <strong>Company Limit</strong>
+              <div>{billingSummaryData?.max_companies || currentUser?.subscription?.max_companies || 1}</div>
+            </div>
+            <div style={themedStyles.kpiItem}>
+              <strong>Billing Status</strong>
+              <div>{billingSummaryData?.subscription_status || currentUser?.subscription?.subscription_status || "free"}</div>
+            </div>
+            <div style={themedStyles.kpiItem}>
+              <strong>AI Enabled</strong>
+              <div>{(billingSummaryData?.ai_enabled || currentUser?.subscription?.ai_enabled) ? "Yes" : "No"}</div>
+            </div>
+          </div>
+          <div style={themedStyles.pricingGrid}>
+            {(billingPlans.length ? billingPlans : MARKETING_PLANS).map((plan) => {
+              const isCurrentPlan = plan.code === currentPlanCode;
+              const isDowngrade = (plan.code === "free") || (plan.code === "pro" && currentPlanCode === "ai");
+              return (
+                <div key={plan.code} style={themedStyles.pricingCard}>
+                  <div style={themedStyles.pricingHeader}>
+                    <div>
+                      <strong>{plan.label}</strong>
+                      <div style={themedStyles.updateIndicator}>{plan.summary}</div>
+                    </div>
+                    <span style={themedStyles.statusPill}>{isCurrentPlan ? "Current" : "Upgrade"}</span>
+                  </div>
+                  <div style={themedStyles.pricingAmount}>{plan.price_monthly ? `$${plan.price_monthly}/mo` : "$0"}</div>
+                  <div style={themedStyles.pricingAmountSubtle}>{formatKes(plan.local_price_kes || 0)} / month</div>
+                  <div style={themedStyles.reconciliationList}>
+                    {(plan.features || []).map((feature) => (
+                      <div key={`${plan.code}-${feature}`} style={themedStyles.reconciliationItem}>
+                        <strong>{feature}</strong>
+                      </div>
+                    ))}
+                  </div>
+                  {plan.code !== "free" ? (
+                    <div style={themedStyles.actionRow}>
+                      <button
+                        type="button"
+                        onClick={() => startStripeCheckout(plan.code)}
+                        style={themedStyles.button}
+                        disabled={billingLoading || isCurrentPlan || isDowngrade || !["owner", "admin"].includes(currentUser?.role || "")}
+                      >
+                        Pay with Stripe
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => startMpesaCheckout(plan.code)}
+                        style={themedStyles.secondaryActionButton}
+                        disabled={billingLoading || isCurrentPlan || isDowngrade || !["owner", "admin"].includes(currentUser?.role || "")}
+                      >
+                        Pay with M-Pesa
+                      </button>
+                    </div>
+                  ) : (
+                    <p style={themedStyles.updateIndicator}>Starter stays free for onboarding and classroom growth.</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <div style={themedStyles.quickEntryGrid}>
+            <label style={themedStyles.budgetField}>
+              M-Pesa Phone Number
+              <input
+                value={mpesaPhoneNumber}
+                onChange={(event) => setMpesaPhoneNumber(event.target.value)}
+                placeholder="2547XXXXXXXX"
+                style={themedStyles.tableInput}
+              />
+            </label>
+            <div style={themedStyles.kpiItem}>
+              <strong>Kenya Pricing</strong>
+              <div>Pro {formatKes(900)} / AI {formatKes(1500)}</div>
+              <div style={themedStyles.updateIndicator}>Perfect for dukas, freelancers, Instagram sellers, and CPA students.</div>
+            </div>
+            {mpesaCheckout ? (
+              <div style={themedStyles.kpiItem}>
+                <strong>M-Pesa Status</strong>
+                <div>{mpesaCheckout.status}</div>
+                <div style={themedStyles.updateIndicator}>{mpesaCheckout.external_reference || mpesaCheckout.checkout_request_id}</div>
+                <button type="button" onClick={refreshMpesaCheckout} style={themedStyles.secondaryActionButton}>Refresh Status</button>
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -3913,103 +4584,112 @@ export default function App() {
               <p style={themedStyles.graphNote}>Pressure-test the next six months using growth, collections, stock, and capex assumptions.</p>
             </div>
           </div>
-          <div style={themedStyles.presetRow}>
-            {SCENARIO_PRESETS.map((preset) => (
-              <button
-                key={preset.id}
-                type="button"
-                onClick={() => applyScenarioPreset(preset.id)}
-                style={themedStyles.presetButton}
-                title={preset.description}
-              >
-                {preset.label}
-              </button>
-            ))}
-          </div>
-          <div style={themedStyles.budgetGrid}>
-            <label style={themedStyles.budgetField}>
-              Revenue Growth %
-              <input
-                type="number"
-                step="0.1"
-                value={scenarioInputs.revenueGrowth}
-                onChange={(event) => updateScenarioInput("revenueGrowth", event.target.value)}
-                style={themedStyles.tableInput}
-              />
-            </label>
-            <label style={themedStyles.budgetField}>
-              Expense Growth %
-              <input
-                type="number"
-                step="0.1"
-                value={scenarioInputs.expenseGrowth}
-                onChange={(event) => updateScenarioInput("expenseGrowth", event.target.value)}
-                style={themedStyles.tableInput}
-              />
-            </label>
-            <label style={themedStyles.budgetField}>
-              Collections Drag %
-              <input
-                type="number"
-                step="0.1"
-                value={scenarioInputs.collectionsDrag}
-                onChange={(event) => updateScenarioInput("collectionsDrag", event.target.value)}
-                style={themedStyles.tableInput}
-              />
-            </label>
-            <label style={themedStyles.budgetField}>
-              Inventory Shock %
-              <input
-                type="number"
-                step="0.1"
-                value={scenarioInputs.inventoryShock}
-                onChange={(event) => updateScenarioInput("inventoryShock", event.target.value)}
-                style={themedStyles.tableInput}
-              />
-            </label>
-            <label style={themedStyles.budgetField}>
-              Month 1 Capex
-              <input
-                type="number"
-                step="0.01"
-                value={scenarioInputs.capexPlan}
-                onChange={(event) => updateScenarioInput("capexPlan", event.target.value)}
-                style={themedStyles.tableInput}
-              />
-            </label>
-          </div>
-          <div style={themedStyles.chartWrap}>
-            <ResponsiveContainer width="100%" height={320}>
-              <LineChart data={forecastModel.data}>
-                <CartesianGrid strokeDasharray="3 3" stroke={isDarkMode ? "#334155" : "#dbeafe"} />
-                <XAxis dataKey="month" />
-                <YAxis />
-                <Tooltip formatter={(value) => formatMoney(Number(value))} />
-                <Legend />
-                <Line type="monotone" dataKey="revenue" stroke="#0f766e" strokeWidth={3} dot={false} />
-                <Line type="monotone" dataKey="expense" stroke="#dc2626" strokeWidth={3} dot={false} />
-                <Line type="monotone" dataKey="cash" stroke="#1d4ed8" strokeWidth={3} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-          <div style={themedStyles.kpiGrid}>
-            <div style={themedStyles.kpiItem}>
-              <strong>Ending Cash</strong>
-              <div>{formatMoney(forecastModel.summary.endingCash)}</div>
+          {hasProPlan ? (
+            <>
+              <div style={themedStyles.presetRow}>
+                {SCENARIO_PRESETS.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => applyScenarioPreset(preset.id)}
+                    style={themedStyles.presetButton}
+                    title={preset.description}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+              <div style={themedStyles.budgetGrid}>
+                <label style={themedStyles.budgetField}>
+                  Revenue Growth %
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={scenarioInputs.revenueGrowth}
+                    onChange={(event) => updateScenarioInput("revenueGrowth", event.target.value)}
+                    style={themedStyles.tableInput}
+                  />
+                </label>
+                <label style={themedStyles.budgetField}>
+                  Expense Growth %
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={scenarioInputs.expenseGrowth}
+                    onChange={(event) => updateScenarioInput("expenseGrowth", event.target.value)}
+                    style={themedStyles.tableInput}
+                  />
+                </label>
+                <label style={themedStyles.budgetField}>
+                  Collections Drag %
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={scenarioInputs.collectionsDrag}
+                    onChange={(event) => updateScenarioInput("collectionsDrag", event.target.value)}
+                    style={themedStyles.tableInput}
+                  />
+                </label>
+                <label style={themedStyles.budgetField}>
+                  Inventory Shock %
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={scenarioInputs.inventoryShock}
+                    onChange={(event) => updateScenarioInput("inventoryShock", event.target.value)}
+                    style={themedStyles.tableInput}
+                  />
+                </label>
+                <label style={themedStyles.budgetField}>
+                  Month 1 Capex
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={scenarioInputs.capexPlan}
+                    onChange={(event) => updateScenarioInput("capexPlan", event.target.value)}
+                    style={themedStyles.tableInput}
+                  />
+                </label>
+              </div>
+              <div style={themedStyles.chartWrap}>
+                <ResponsiveContainer width="100%" height={320}>
+                  <LineChart data={forecastModel.data}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={isDarkMode ? "#334155" : "#dbeafe"} />
+                    <XAxis dataKey="month" />
+                    <YAxis />
+                    <Tooltip formatter={(value) => formatMoney(Number(value))} />
+                    <Legend />
+                    <Line type="monotone" dataKey="revenue" stroke="#0f766e" strokeWidth={3} dot={false} />
+                    <Line type="monotone" dataKey="expense" stroke="#dc2626" strokeWidth={3} dot={false} />
+                    <Line type="monotone" dataKey="cash" stroke="#1d4ed8" strokeWidth={3} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+              <div style={themedStyles.kpiGrid}>
+                <div style={themedStyles.kpiItem}>
+                  <strong>Ending Cash</strong>
+                  <div>{formatMoney(forecastModel.summary.endingCash)}</div>
+                </div>
+                <div style={themedStyles.kpiItem}>
+                  <strong>Lowest Cash Point</strong>
+                  <div>{formatMoney(forecastModel.summary.lowestCash)}</div>
+                </div>
+                <div style={themedStyles.kpiItem}>
+                  <strong>Financing Need</strong>
+                  <div>{formatMoney(forecastModel.summary.financingNeed)}</div>
+                </div>
+                <div style={themedStyles.kpiItem}>
+                  <strong>Peak Monthly Revenue</strong>
+                  <div>{formatMoney(forecastModel.summary.peakRevenueMonth)}</div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div style={themedStyles.integrationBanner}>
+              <strong>Upgrade to Pro to unlock the Scenario Planner</strong>
+              <div style={themedStyles.updateIndicator}>Stress test cash flow, collections drag, stock shocks, and capex before they hit the business.</div>
             </div>
-            <div style={themedStyles.kpiItem}>
-              <strong>Lowest Cash Point</strong>
-              <div>{formatMoney(forecastModel.summary.lowestCash)}</div>
-            </div>
-            <div style={themedStyles.kpiItem}>
-              <strong>Financing Need</strong>
-              <div>{formatMoney(forecastModel.summary.financingNeed)}</div>
-            </div>
-            <div style={themedStyles.kpiItem}>
-              <strong>Peak Monthly Revenue</strong>
-              <div>{formatMoney(forecastModel.summary.peakRevenueMonth)}</div>
-            </div>
-          </div>
+          )}
         </div>
 
         <div style={themedStyles.card}>
@@ -4028,6 +4708,76 @@ export default function App() {
         <div style={themedStyles.card}>
           <div style={themedStyles.statementHeader}>
             <div>
+              <h3>AI CFO System</h3>
+              <p style={themedStyles.graphNote}>This is the proactive layer: it reads the business, spots risk, forecasts cash, and tells the owner what to do next.</p>
+            </div>
+            <div style={themedStyles.scoreBadge}>{hasAiPlan ? "AI" : "LOCK"}</div>
+          </div>
+          <div style={themedStyles.kpiGrid}>
+            <div style={themedStyles.kpiItem}>
+              <strong>Cash Balance</strong>
+              <div>{formatMoney(aiCfoOverviewData?.metrics?.cash_balance || 0)}</div>
+            </div>
+            <div style={themedStyles.kpiItem}>
+              <strong>Current Ratio</strong>
+              <div>{aiCfoOverviewData?.metrics?.current_ratio ? `${aiCfoOverviewData.metrics.current_ratio}x` : "N/A"}</div>
+            </div>
+            <div style={themedStyles.kpiItem}>
+              <strong>Monthly Outflow</strong>
+              <div>{formatMoney(aiCfoOverviewData?.metrics?.monthly_outflow || 0)}</div>
+            </div>
+            <div style={themedStyles.kpiItem}>
+              <strong>Cash Runway</strong>
+              <div>{aiCfoOverviewData?.metrics?.cash_runway_months ? `${aiCfoOverviewData.metrics.cash_runway_months} months` : "N/A"}</div>
+            </div>
+          </div>
+          <div style={themedStyles.alertGrid}>
+            {(aiCfoOverviewData?.alerts || []).slice(0, 4).map((alert) => (
+              <div
+                key={`${alert.title}-${alert.severity}`}
+                style={{
+                  ...themedStyles.alertCard,
+                  ...(alert.severity === "high"
+                    ? themedStyles.alertCritical
+                    : alert.severity === "medium"
+                      ? themedStyles.alertWarning
+                      : themedStyles.alertPositive),
+                }}
+              >
+                <span style={themedStyles.alertPill}>{alert.severity}</span>
+                <strong>{alert.title}</strong>
+                <div>{alert.message}</div>
+                <div style={themedStyles.updateIndicator}>{alert.recommendation}</div>
+              </div>
+            ))}
+          </div>
+          <div style={themedStyles.narrativeCard}>
+            {aiCfoOverviewData?.narrative || "AI CFO will summarize the company once there is enough live finance data for the selected company."}
+          </div>
+          {hasAiPlan ? (
+            <div style={themedStyles.quickEntryGrid}>
+              <input
+                placeholder="Ask: Why is my profit low? Will I run out of cash? Which customers should I chase?"
+                value={aiCfoQuestion}
+                onChange={(event) => setAiCfoQuestion(event.target.value)}
+                style={themedStyles.tableInput}
+              />
+              <button type="button" onClick={askAiCfo} style={themedStyles.button} disabled={aiCfoLoading}>
+                {aiCfoLoading ? "Thinking..." : "Ask AI CFO"}
+              </button>
+            </div>
+          ) : (
+            <div style={themedStyles.integrationBanner}>
+              <strong>Upgrade to AI CFO</strong>
+              <div style={themedStyles.updateIndicator}>Unlock chat with your business, proactive recommendations, and the full owner copilot workflow.</div>
+            </div>
+          )}
+          {aiCfoAnswer ? <div style={themedStyles.narrativeCard}>{aiCfoAnswer.answer}</div> : null}
+        </div>
+
+        <div style={themedStyles.card}>
+          <div style={themedStyles.statementHeader}>
+            <div>
               <h3>Finance Operations Hub</h3>
               <p style={themedStyles.graphNote}>
                 Deeper workflows for receivables, payables, banking, reconciliation, and tax live here for {selectedCompany?.name || "the active company"}.
@@ -4035,6 +4785,12 @@ export default function App() {
             </div>
             {financeLoading ? <span style={themedStyles.updateIndicator}>Refreshing finance workspace...</span> : null}
           </div>
+          {!hasProPlan ? (
+            <div style={themedStyles.integrationBanner}>
+              <strong>Pro plan lock</strong>
+              <div style={themedStyles.updateIndicator}>Free users can view the workspace, but creation, automation, exports, bank sync, reconciliation rules, tax filing, and operations actions unlock on Pro.</div>
+            </div>
+          ) : null}
           <div style={themedStyles.kpiGrid}>
             <div style={themedStyles.kpiItem}>
               <strong>Open Receivables</strong>
@@ -4180,7 +4936,7 @@ export default function App() {
               </div>
               <div style={themedStyles.actionRow}>
                 <button type="button" onClick={() => addDocumentItem(setInvoiceForm)} style={themedStyles.secondaryActionButton}>Add Line</button>
-                <button type="button" onClick={createInvoiceRecord} style={themedStyles.button} disabled={!canManageFinanceOps}>
+                <button type="button" onClick={createInvoiceRecord} style={themedStyles.button} disabled={!canManageFinanceOps || !hasProPlan}>
                   Create Invoice
                 </button>
               </div>
@@ -4215,12 +4971,12 @@ export default function App() {
                         <td style={themedStyles.td}>
                           <div style={themedStyles.actionRow}>
                             {invoice.status === "draft" ? (
-                              <button type="button" onClick={() => updateInvoiceWorkflowStatus(invoice.id, "sent")} style={themedStyles.button} disabled={!canManageFinanceOps}>
+                              <button type="button" onClick={() => updateInvoiceWorkflowStatus(invoice.id, "sent")} style={themedStyles.button} disabled={!canManageFinanceOps || !hasProPlan}>
                                 Send
                               </button>
                             ) : null}
                             {invoice.balance_due > 0 ? (
-                              <button type="button" onClick={() => promptAndRecordInvoicePayment(invoice)} style={themedStyles.secondaryActionButton} disabled={!canManageFinanceOps}>
+                              <button type="button" onClick={() => promptAndRecordInvoicePayment(invoice)} style={themedStyles.secondaryActionButton} disabled={!canManageFinanceOps || !hasProPlan}>
                                 Record Payment
                               </button>
                             ) : null}
@@ -4316,7 +5072,7 @@ export default function App() {
               </div>
               <div style={themedStyles.actionRow}>
                 <button type="button" onClick={() => addDocumentItem(setBillForm)} style={themedStyles.secondaryActionButton}>Add Line</button>
-                <button type="button" onClick={createBillRecord} style={themedStyles.button} disabled={!canManagePayables}>
+                <button type="button" onClick={createBillRecord} style={themedStyles.button} disabled={!canManagePayables || !hasProPlan}>
                   Create Bill
                 </button>
               </div>
@@ -4351,17 +5107,17 @@ export default function App() {
                         <td style={themedStyles.td}>
                           <div style={themedStyles.actionRow}>
                             {bill.status === "draft" ? (
-                              <button type="button" onClick={() => updateBillWorkflowStatus(bill.id, "approved")} style={themedStyles.button} disabled={!canManagePayables}>
+                              <button type="button" onClick={() => updateBillWorkflowStatus(bill.id, "approved")} style={themedStyles.button} disabled={!canManagePayables || !hasProPlan}>
                                 Approve
                               </button>
                             ) : null}
                             {bill.balance_due > 0 ? (
-                              <button type="button" onClick={() => promptAndRecordBillPayment(bill)} style={themedStyles.secondaryActionButton} disabled={!canManagePayables}>
+                              <button type="button" onClick={() => promptAndRecordBillPayment(bill)} style={themedStyles.secondaryActionButton} disabled={!canManagePayables || !hasProPlan}>
                                 Record Payment
                               </button>
                             ) : null}
                             {bill.balance_due > 0 ? (
-                              <button type="button" onClick={() => scheduleBillDisbursement(bill)} style={themedStyles.secondaryActionButton} disabled={!canManagePayables}>
+                              <button type="button" onClick={() => scheduleBillDisbursement(bill)} style={themedStyles.secondaryActionButton} disabled={!canManagePayables || !hasProPlan}>
                                 Schedule Rail
                               </button>
                             ) : null}
@@ -4398,7 +5154,7 @@ export default function App() {
                     type="button"
                     onClick={createPlaidLinkToken}
                     style={themedStyles.button}
-                    disabled={!canManagePayables || !bankingProviders?.plaid?.enabled}
+                    disabled={!canManagePayables || !hasProPlan || !bankingProviders?.plaid?.enabled}
                   >
                     Connect Bank
                   </button>
@@ -4406,7 +5162,7 @@ export default function App() {
                     type="button"
                     onClick={() => syncPlaidTransactions()}
                     style={themedStyles.secondaryActionButton}
-                    disabled={!canManagePayables || !bankConnections.length}
+                    disabled={!canManagePayables || !hasProPlan || !bankConnections.length}
                   >
                     Sync Connected Bank
                   </button>
@@ -4422,7 +5178,7 @@ export default function App() {
                         type="button"
                         onClick={() => syncPlaidTransactions(connection.id)}
                         style={themedStyles.secondaryActionButton}
-                        disabled={!canManagePayables}
+                        disabled={!canManagePayables || !hasProPlan}
                       >
                         Sync
                       </button>
@@ -4437,7 +5193,7 @@ export default function App() {
               />
               <p style={themedStyles.graphNote}>Accepted columns: date, description, amount, reference or debit/credit pairs.</p>
               <div style={themedStyles.actionRow}>
-                <button type="button" onClick={importBankFeed} style={themedStyles.button} disabled={!canManagePayables}>
+                <button type="button" onClick={importBankFeed} style={themedStyles.button} disabled={!canManagePayables || !hasProPlan}>
                   Import Feed
                 </button>
               </div>
@@ -4464,7 +5220,7 @@ export default function App() {
                         <td style={themedStyles.td}><span style={themedStyles.statusPill}>{transaction.status}</span></td>
                         <td style={themedStyles.td}>
                           {transaction.status !== "matched" ? (
-                            <button type="button" onClick={() => flagReconciliationException(transaction.id)} style={themedStyles.secondaryActionButton} disabled={!canManagePayables}>
+                            <button type="button" onClick={() => flagReconciliationException(transaction.id)} style={themedStyles.secondaryActionButton} disabled={!canManagePayables || !hasProPlan}>
                               Flag Exception
                             </button>
                           ) : (
@@ -4492,7 +5248,7 @@ export default function App() {
                           {suggestion.transaction.description} • {formatMoney(suggestion.transaction.absolute_amount)}
                         </div>
                       </div>
-                      <button type="button" onClick={() => reconcileSuggestion(suggestion)} style={themedStyles.button} disabled={!canManagePayables}>
+                      <button type="button" onClick={() => reconcileSuggestion(suggestion)} style={themedStyles.button} disabled={!canManagePayables || !hasProPlan}>
                         Match
                       </button>
                     </div>
@@ -4582,7 +5338,7 @@ export default function App() {
                 />
               </div>
               <div style={themedStyles.actionRow}>
-                <button type="button" onClick={saveTaxProfile} style={themedStyles.button} disabled={!canManagePayables}>
+                <button type="button" onClick={saveTaxProfile} style={themedStyles.button} disabled={!canManagePayables || !hasProPlan}>
                   Save Tax Profile
                 </button>
               </div>
@@ -4658,7 +5414,7 @@ export default function App() {
                   onChange={(event) => updateTaxFilingFormField("period_end", event.target.value)}
                   style={themedStyles.tableInput}
                 />
-                <button type="button" onClick={prepareTaxFilingRecord} style={themedStyles.button} disabled={!canManagePayables}>
+                <button type="button" onClick={prepareTaxFilingRecord} style={themedStyles.button} disabled={!canManagePayables || !hasProPlan}>
                   Prepare Filing
                 </button>
               </div>
@@ -4682,7 +5438,7 @@ export default function App() {
                         <td style={themedStyles.td}><span style={themedStyles.statusPill}>{filing.status}</span></td>
                         <td style={themedStyles.td}>
                           {filing.status !== "submitted" ? (
-                            <button type="button" onClick={() => submitTaxFilingRecord(filing.id)} style={themedStyles.button} disabled={!canManagePayables}>
+                            <button type="button" onClick={() => submitTaxFilingRecord(filing.id)} style={themedStyles.button} disabled={!canManagePayables || !hasProPlan}>
                               Submit
                             </button>
                           ) : (
@@ -4737,10 +5493,10 @@ export default function App() {
                   <option value="debit">debit</option>
                   <option value="credit">credit</option>
                 </select>
-                <button type="button" onClick={createChartAccount} style={themedStyles.button} disabled={!canManagePayables}>Create Account</button>
+                <button type="button" onClick={createChartAccount} style={themedStyles.button} disabled={!canManagePayables || !hasProPlan}>Create Account</button>
               </div>
               <div style={themedStyles.actionRow}>
-                <button type="button" onClick={seedDefaultChartOfAccounts} style={themedStyles.secondaryActionButton} disabled={!canManagePayables}>
+                <button type="button" onClick={seedDefaultChartOfAccounts} style={themedStyles.secondaryActionButton} disabled={!canManagePayables || !hasProPlan}>
                   Seed Default Chart
                 </button>
               </div>
@@ -4784,7 +5540,7 @@ export default function App() {
               </div>
               <div style={themedStyles.actionRow}>
                 <button type="button" onClick={addJournalLine} style={themedStyles.secondaryActionButton}>Add Line</button>
-                <button type="button" onClick={postManualJournal} style={themedStyles.button} disabled={!canManagePayables}>Post Journal</button>
+                <button type="button" onClick={postManualJournal} style={themedStyles.button} disabled={!canManagePayables || !hasProPlan}>Post Journal</button>
               </div>
               <div style={themedStyles.tableWrap}>
                 <table style={themedStyles.table}>
@@ -4894,7 +5650,7 @@ export default function App() {
                   <option value="received">received</option>
                   <option value="verified">verified</option>
                 </select>
-                <button type="button" onClick={saveVendorProfile} style={themedStyles.button} disabled={!canManagePayables}>Save Vendor</button>
+                <button type="button" onClick={saveVendorProfile} style={themedStyles.button} disabled={!canManagePayables || !hasProPlan}>Save Vendor</button>
               </div>
               <div style={themedStyles.tableWrap}>
                 <table style={themedStyles.table}>
@@ -4939,7 +5695,7 @@ export default function App() {
                         <td style={themedStyles.td}><span style={themedStyles.statusPill}>{item.status}</span></td>
                         <td style={themedStyles.td}>
                           {item.status !== "completed" ? (
-                            <button type="button" onClick={() => executeBillDisbursement(item.id)} style={themedStyles.button} disabled={!canManagePayables}>
+                            <button type="button" onClick={() => executeBillDisbursement(item.id)} style={themedStyles.button} disabled={!canManagePayables || !hasProPlan}>
                               Execute
                             </button>
                           ) : (
@@ -4984,10 +5740,10 @@ export default function App() {
                   <option value="flag_exception">flag_exception</option>
                 </select>
                 <input placeholder="Target / reference" value={reconciliationRuleForm.target_reference} onChange={(event) => updateReconciliationRuleField("target_reference", event.target.value)} style={themedStyles.tableInput} />
-                <button type="button" onClick={createReconciliationRuleRecord} style={themedStyles.button} disabled={!canManagePayables}>Save Rule</button>
+                <button type="button" onClick={createReconciliationRuleRecord} style={themedStyles.button} disabled={!canManagePayables || !hasProPlan}>Save Rule</button>
               </div>
               <div style={themedStyles.actionRow}>
-                <button type="button" onClick={autoApplyReconciliationRules} style={themedStyles.secondaryActionButton} disabled={!canManagePayables}>
+                <button type="button" onClick={autoApplyReconciliationRules} style={themedStyles.secondaryActionButton} disabled={!canManagePayables || !hasProPlan}>
                   Auto Apply Rules
                 </button>
               </div>
@@ -5021,7 +5777,7 @@ export default function App() {
                       <strong>{exception.exception_type}</strong>
                       <div style={themedStyles.updateIndicator}>{exception.transaction?.description || "Bank transaction"} • {formatMoney(exception.transaction?.absolute_amount || 0)}</div>
                     </div>
-                    <button type="button" onClick={() => resolveReconciliationException(exception.id)} style={themedStyles.button} disabled={!canManagePayables}>
+                    <button type="button" onClick={() => resolveReconciliationException(exception.id)} style={themedStyles.button} disabled={!canManagePayables || !hasProPlan}>
                       Resolve
                     </button>
                   </div>
@@ -5059,14 +5815,14 @@ export default function App() {
                 </select>
                 <input type="number" step="0.01" placeholder="Hourly rate" value={employeeForm.hourly_rate} onChange={(event) => updateEmployeeFormField("hourly_rate", event.target.value)} style={themedStyles.tableInput} />
                 <input type="number" step="0.01" placeholder="Salary amount" value={employeeForm.salary_amount} onChange={(event) => updateEmployeeFormField("salary_amount", event.target.value)} style={themedStyles.tableInput} />
-                <button type="button" onClick={createEmployeeRecord} style={themedStyles.button} disabled={!canManagePayables}>Add Employee</button>
+                <button type="button" onClick={createEmployeeRecord} style={themedStyles.button} disabled={!canManagePayables || !hasProPlan}>Add Employee</button>
               </div>
               <div style={themedStyles.adminCreateGrid}>
                 <input placeholder="Contractor name" value={contractorForm.full_name} onChange={(event) => updateContractorFormField("full_name", event.target.value)} style={themedStyles.tableInput} />
                 <input placeholder="Email" value={contractorForm.email} onChange={(event) => updateContractorFormField("email", event.target.value)} style={themedStyles.tableInput} />
                 <input placeholder="Tax ID" value={contractorForm.tax_id} onChange={(event) => updateContractorFormField("tax_id", event.target.value)} style={themedStyles.tableInput} />
                 <input type="number" step="0.01" placeholder="Default rate" value={contractorForm.default_rate} onChange={(event) => updateContractorFormField("default_rate", event.target.value)} style={themedStyles.tableInput} />
-                <button type="button" onClick={createContractorRecord} style={themedStyles.secondaryActionButton} disabled={!canManagePayables}>Add Contractor</button>
+                <button type="button" onClick={createContractorRecord} style={themedStyles.secondaryActionButton} disabled={!canManagePayables || !hasProPlan}>Add Contractor</button>
               </div>
               <div style={themedStyles.tableWrap}>
                 <table style={themedStyles.table}>
@@ -5106,7 +5862,7 @@ export default function App() {
                 </select>
                 <input type="date" value={timeEntryForm.work_date} onChange={(event) => updateTimeEntryFormField("work_date", event.target.value)} style={themedStyles.tableInput} />
                 <input type="number" step="0.1" placeholder="Hours" value={timeEntryForm.hours} onChange={(event) => updateTimeEntryFormField("hours", event.target.value)} style={themedStyles.tableInput} />
-                <button type="button" onClick={createTimeEntryRecord} style={themedStyles.button} disabled={!canManageFinanceOps}>Log Time</button>
+                <button type="button" onClick={createTimeEntryRecord} style={themedStyles.button} disabled={!canManageFinanceOps || !hasProPlan}>Log Time</button>
               </div>
               <div style={themedStyles.adminCreateGrid}>
                 <select value={mileageForm.employee_id} onChange={(event) => updateMileageFormField("employee_id", event.target.value)} style={themedStyles.tableInput}>
@@ -5119,8 +5875,8 @@ export default function App() {
                 </select>
                 <input type="number" step="0.1" placeholder="Miles" value={mileageForm.miles} onChange={(event) => updateMileageFormField("miles", event.target.value)} style={themedStyles.tableInput} />
                 <input type="number" step="0.01" placeholder="Rate per mile" value={mileageForm.rate_per_mile} onChange={(event) => updateMileageFormField("rate_per_mile", event.target.value)} style={themedStyles.tableInput} />
-                <button type="button" onClick={createMileageRecord} style={themedStyles.secondaryActionButton} disabled={!canManageFinanceOps}>Log Mileage</button>
-                <button type="button" onClick={processPayrollRun} style={themedStyles.button} disabled={!canManagePayables}>Process Payroll</button>
+                <button type="button" onClick={createMileageRecord} style={themedStyles.secondaryActionButton} disabled={!canManageFinanceOps || !hasProPlan}>Log Mileage</button>
+                <button type="button" onClick={processPayrollRun} style={themedStyles.button} disabled={!canManagePayables || !hasProPlan}>Process Payroll</button>
               </div>
               <div style={themedStyles.tableWrap}>
                 <table style={themedStyles.table}>
@@ -5182,14 +5938,14 @@ export default function App() {
                 <input type="number" step="0.01" placeholder="Qty on hand" value={inventoryItemForm.quantity_on_hand} onChange={(event) => updateInventoryItemFormField("quantity_on_hand", event.target.value)} style={themedStyles.tableInput} />
                 <input type="number" step="0.01" placeholder="Reorder point" value={inventoryItemForm.reorder_point} onChange={(event) => updateInventoryItemFormField("reorder_point", event.target.value)} style={themedStyles.tableInput} />
                 <input type="number" step="0.01" placeholder="Unit cost" value={inventoryItemForm.unit_cost} onChange={(event) => updateInventoryItemFormField("unit_cost", event.target.value)} style={themedStyles.tableInput} />
-                <button type="button" onClick={createInventoryItemRecord} style={themedStyles.button} disabled={!canManagePayables}>Create Item</button>
+                <button type="button" onClick={createInventoryItemRecord} style={themedStyles.button} disabled={!canManagePayables || !hasProPlan}>Create Item</button>
               </div>
               <div style={themedStyles.adminCreateGrid}>
                 <input placeholder="PO vendor" value={purchaseOrderForm.vendor_name} onChange={(event) => updatePurchaseOrderFormField("vendor_name", event.target.value)} style={themedStyles.tableInput} />
                 <input type="date" value={purchaseOrderForm.issue_date} onChange={(event) => updatePurchaseOrderFormField("issue_date", event.target.value)} style={themedStyles.tableInput} />
                 <input type="date" value={purchaseOrderForm.expected_date} onChange={(event) => updatePurchaseOrderFormField("expected_date", event.target.value)} style={themedStyles.tableInput} />
                 <button type="button" onClick={() => addPurchaseOrderItem()} style={themedStyles.secondaryActionButton}>Add PO Line</button>
-                <button type="button" onClick={createPurchaseOrderRecord} style={themedStyles.button} disabled={!canManagePayables}>Create PO</button>
+                <button type="button" onClick={createPurchaseOrderRecord} style={themedStyles.button} disabled={!canManagePayables || !hasProPlan}>Create PO</button>
               </div>
               <div style={themedStyles.documentLineList}>
                 {purchaseOrderForm.items.map((item, index) => (
@@ -5219,10 +5975,10 @@ export default function App() {
                         <td style={themedStyles.td}><span style={themedStyles.statusPill}>{po.status}</span></td>
                         <td style={themedStyles.td}>
                           {po.status === "draft" ? (
-                            <button type="button" onClick={() => submitPurchaseOrderRecord(po.id)} style={themedStyles.button} disabled={!canManagePayables}>Submit</button>
+                            <button type="button" onClick={() => submitPurchaseOrderRecord(po.id)} style={themedStyles.button} disabled={!canManagePayables || !hasProPlan}>Submit</button>
                           ) : null}
                           {po.status === "ordered" || po.status === "partial" ? (
-                            <button type="button" onClick={() => receivePurchaseOrderRecord(po)} style={themedStyles.secondaryActionButton} disabled={!canManagePayables}>Receive</button>
+                            <button type="button" onClick={() => receivePurchaseOrderRecord(po)} style={themedStyles.secondaryActionButton} disabled={!canManagePayables || !hasProPlan}>Receive</button>
                           ) : null}
                         </td>
                       </tr>
@@ -5239,7 +5995,7 @@ export default function App() {
                 <input placeholder="Customer" value={projectForm.customer_name} onChange={(event) => updateProjectFormField("customer_name", event.target.value)} style={themedStyles.tableInput} />
                 <input type="number" step="0.01" placeholder="Budget revenue" value={projectForm.budget_revenue} onChange={(event) => updateProjectFormField("budget_revenue", event.target.value)} style={themedStyles.tableInput} />
                 <input type="number" step="0.01" placeholder="Budget cost" value={projectForm.budget_cost} onChange={(event) => updateProjectFormField("budget_cost", event.target.value)} style={themedStyles.tableInput} />
-                <button type="button" onClick={createProjectRecord} style={themedStyles.button} disabled={!canManagePayables}>Create Project</button>
+                <button type="button" onClick={createProjectRecord} style={themedStyles.button} disabled={!canManagePayables || !hasProPlan}>Create Project</button>
               </div>
               <div style={themedStyles.adminCreateGrid}>
                 <select value={projectCostForm.project_id} onChange={(event) => updateProjectCostFormField("project_id", event.target.value)} style={themedStyles.tableInput}>
@@ -5252,7 +6008,7 @@ export default function App() {
                 </select>
                 <input placeholder="Description" value={projectCostForm.description} onChange={(event) => updateProjectCostFormField("description", event.target.value)} style={themedStyles.tableInput} />
                 <input type="number" step="0.01" placeholder="Amount" value={projectCostForm.amount} onChange={(event) => updateProjectCostFormField("amount", event.target.value)} style={themedStyles.tableInput} />
-                <button type="button" onClick={createProjectCostRecord} style={themedStyles.secondaryActionButton} disabled={!canManageFinanceOps}>Post Project Entry</button>
+                <button type="button" onClick={createProjectCostRecord} style={themedStyles.secondaryActionButton} disabled={!canManageFinanceOps || !hasProPlan}>Post Project Entry</button>
               </div>
               <div style={themedStyles.tableWrap}>
                 <table style={themedStyles.table}>
@@ -5294,7 +6050,7 @@ export default function App() {
                   <option value="power_bi">power_bi</option>
                   <option value="plaid">plaid</option>
                 </select>
-                <button type="button" onClick={connectIntegrationRecord} style={themedStyles.button} disabled={!canManagePayables}>Connect Integration</button>
+                <button type="button" onClick={connectIntegrationRecord} style={themedStyles.button} disabled={!canManagePayables || !hasProPlan}>Connect Integration</button>
               </div>
               <div style={themedStyles.reconciliationList}>
                 {integrations.map((integration) => (
@@ -5303,7 +6059,7 @@ export default function App() {
                       <strong>{integration.provider}</strong>
                       <div style={themedStyles.updateIndicator}>{integration.category} • {integration.status}</div>
                     </div>
-                    <button type="button" onClick={() => syncIntegrationRecord(integration.id)} style={themedStyles.secondaryActionButton} disabled={!canManagePayables}>
+                    <button type="button" onClick={() => syncIntegrationRecord(integration.id)} style={themedStyles.secondaryActionButton} disabled={!canManagePayables || !hasProPlan}>
                       Sync
                     </button>
                   </div>
@@ -5346,6 +6102,7 @@ export default function App() {
                   <tr>
                     <th style={themedStyles.th}>Email</th>
                     <th style={themedStyles.th}>Role</th>
+                    <th style={themedStyles.th}>Companies</th>
                     <th style={themedStyles.th}>Actions</th>
                   </tr>
                 </thead>
@@ -5366,6 +6123,9 @@ export default function App() {
                           <option value="cashier">cashier</option>
                           <option value="member">member</option>
                         </select>
+                      </td>
+                      <td style={themedStyles.td}>
+                        {(user.memberships || []).map((membership) => membership.company_name).join(", ") || "No company access"}
                       </td>
                       <td style={themedStyles.td}>
                         <button onClick={() => removeAdminUser(user.id)} style={themedStyles.deleteButton}>Delete</button>
@@ -6097,6 +6857,69 @@ const styles = {
     padding: 20,
     background: "linear-gradient(140deg, #082f49 0%, #155e75 48%, #f59e0b 100%)",
   },
+  landingShell: {
+    width: "100%",
+    maxWidth: 1320,
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+    gap: 20,
+    alignItems: "stretch",
+  },
+  landingStoryPanel: {
+    background: "linear-gradient(160deg, rgba(11, 31, 58, 0.9) 0%, rgba(15, 118, 110, 0.88) 100%)",
+    color: "#f8fafc",
+    borderRadius: 30,
+    padding: "clamp(24px, 4vw, 42px)",
+    boxShadow: "0 30px 80px rgba(7, 13, 28, 0.3)",
+    border: "1px solid rgba(255,255,255,0.18)",
+    display: "flex",
+    flexDirection: "column",
+    gap: 20,
+  },
+  landingBadge: {
+    alignSelf: "flex-start",
+    padding: "8px 14px",
+    borderRadius: 999,
+    background: "rgba(254, 240, 138, 0.18)",
+    border: "1px solid rgba(254, 240, 138, 0.35)",
+    color: "#fef08a",
+    fontSize: 12,
+    fontWeight: 800,
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+  },
+  landingHeadline: {
+    margin: 0,
+    fontSize: "clamp(36px, 5vw, 64px)",
+    lineHeight: 0.98,
+    letterSpacing: -1.4,
+  },
+  landingLead: {
+    margin: 0,
+    maxWidth: 840,
+    color: "rgba(248, 250, 252, 0.9)",
+    fontSize: 17,
+    lineHeight: 1.7,
+  },
+  landingAudienceGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    gap: 12,
+  },
+  landingAudienceCard: {
+    padding: "18px 18px",
+    borderRadius: 18,
+    background: "rgba(255,255,255,0.12)",
+    border: "1px solid rgba(255,255,255,0.2)",
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+  },
+  landingActionRow: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 12,
+  },
   authSingleCard: {
     width: "100%",
     maxWidth: 380,
@@ -6510,6 +7333,45 @@ const styles = {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
     gap: 10,
+  },
+  pricingGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+    gap: 14,
+    marginTop: 14,
+  },
+  pricingCard: {
+    background: "#f8fbff",
+    border: "1px solid #dbeafe",
+    borderRadius: 20,
+    padding: 18,
+    display: "flex",
+    flexDirection: "column",
+    gap: 12,
+  },
+  pricingHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 10,
+    alignItems: "flex-start",
+  },
+  pricingAmount: {
+    fontSize: 30,
+    fontWeight: 800,
+    color: "#0b1f3a",
+    lineHeight: 1,
+  },
+  pricingAmountSubtle: {
+    fontSize: 13,
+    color: "#1d4e89",
+    fontWeight: 700,
+  },
+  landingFeatureList: {
+    margin: 0,
+    paddingLeft: 18,
+    display: "grid",
+    gap: 6,
+    color: "inherit",
   },
   kpiItem: {
     background: "#eff6ff",
