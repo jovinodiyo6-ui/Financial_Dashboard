@@ -119,18 +119,18 @@ const persistWorkspace = (companyId, workspace) => {
 const BUSINESS_TYPE_OPTIONS = [
   {
     value: "sole_proprietor",
-    label: "Sole Proprietorship",
-    description: "Trading account, profit and loss, and balance sheet for a single owner.",
+    label: "Sole Trader",
+    description: "Shows the sole-trader layout only: trading, profit and loss, capital, drawings, and financial position.",
   },
   {
     value: "partnership",
     label: "Partnership",
-    description: "Adds appropriation and partner capital schedules on top of standard statements.",
+    description: "Shows the partnership layout only, including appropriation and partner capital schedules.",
   },
   {
     value: "manufacturing",
     label: "Manufacturing Company",
-    description: "Adds a manufacturing account and cost of production before trading profit.",
+    description: "Shows the manufacturing layout only, including COGM before trading profit.",
   },
 ];
 
@@ -143,10 +143,15 @@ const ACCOUNT_CATALOG = [
   { account: "Inventory", type: "asset", subtype: "current" },
   { account: "Raw Materials Opening Stock", type: "asset", subtype: "current" },
   { account: "Closing Raw Materials", type: "asset", subtype: "current" },
+  { account: "Opening Work in Progress", type: "asset", subtype: "current" },
+  { account: "Closing Work in Progress", type: "asset", subtype: "current" },
   { account: "Prepaid Expenses", type: "asset", subtype: "current" },
   { account: "Accrued Expenses", type: "liability", subtype: "current" },
+  { account: "Salary Arrears", type: "liability", subtype: "current" },
   { account: "Land and Buildings", type: "asset", subtype: "non-current" },
   { account: "Machinery and Equipment", type: "asset", subtype: "non-current" },
+  { account: "Plant and Machinery", type: "asset", subtype: "non-current" },
+  { account: "Plant & Machinery", type: "asset", subtype: "non-current" },
   { account: "Vehicles", type: "asset", subtype: "non-current" },
   { account: "Intellectual Property (Patents, Trademarks)", type: "asset", subtype: "non-current" },
   { account: "Long-term Investments", type: "asset", subtype: "non-current" },
@@ -157,6 +162,7 @@ const ACCOUNT_CATALOG = [
   { account: "Owner Capital", type: "capital", subtype: "equity" },
   { account: "Drawings", type: "drawings", subtype: "equity" },
   { account: "Gross Sales", type: "revenue", subtype: "operating" },
+  { account: "Sales", type: "revenue", subtype: "operating" },
   { account: "Sales Returns", type: "expense", subtype: "operating" },
   { account: "Goods Return", type: "expense", subtype: "operating" },
   { account: "Discounts", type: "expense", subtype: "operating" },
@@ -166,7 +172,12 @@ const ACCOUNT_CATALOG = [
   { account: "Purchases", type: "expense", subtype: "operating" },
   { account: "Returns Outwards", type: "expense", subtype: "operating" },
   { account: "Carriage Inwards", type: "expense", subtype: "operating" },
+  { account: "Carriage Outwards", type: "expense", subtype: "operating" },
   { account: "Direct Labour", type: "expense", subtype: "operating" },
+  { account: "Direct Manufacturing Labor", type: "expense", subtype: "operating" },
+  { account: "Factory Indirect Labor", type: "expense", subtype: "operating" },
+  { account: "Factory Utilities", type: "expense", subtype: "operating" },
+  { account: "Depreciation of Factory Equipment", type: "expense", subtype: "operating" },
   { account: "Factory Expenses", type: "expense", subtype: "operating" },
   { account: "Factory Overheads", type: "expense", subtype: "operating" },
   { account: "Partner Salary", type: "expense", subtype: "operating" },
@@ -176,9 +187,13 @@ const ACCOUNT_CATALOG = [
   { account: "Rental Income", type: "revenue", subtype: "other" },
   { account: "Miscellaneous Income", type: "revenue", subtype: "other" },
   { account: "Payroll Expenses", type: "expense", subtype: "operating" },
+  { account: "Salaries", type: "expense", subtype: "operating" },
+  { account: "Salaries and Wages", type: "expense", subtype: "operating" },
   { account: "Advertising Expenses", type: "expense", subtype: "operating" },
   { account: "Marketing Expenses", type: "expense", subtype: "operating" },
+  { account: "Motor Expenses", type: "expense", subtype: "operating" },
   { account: "Office Expenses", type: "expense", subtype: "operating" },
+  { account: "General Expenses", type: "expense", subtype: "operating" },
   { account: "Rent Expense", type: "expense", subtype: "operating" },
   { account: "Utilities Expense", type: "expense", subtype: "operating" },
   { account: "License Fees", type: "expense", subtype: "operating" },
@@ -252,8 +267,13 @@ const BUSINESS_TEMPLATE_ROWS = {
     { account: "Returns Outwards", type: "expense", subtype: "operating" },
     { account: "Carriage Inwards", type: "expense", subtype: "operating" },
     { account: "Closing Raw Materials", type: "asset", subtype: "current" },
-    { account: "Direct Labour", type: "expense", subtype: "operating" },
+    { account: "Direct Manufacturing Labor", type: "expense", subtype: "operating" },
+    { account: "Factory Indirect Labor", type: "expense", subtype: "operating" },
+    { account: "Factory Utilities", type: "expense", subtype: "operating" },
+    { account: "Depreciation of Factory Equipment", type: "expense", subtype: "operating" },
     { account: "Factory Expenses", type: "expense", subtype: "operating" },
+    { account: "Opening Work in Progress", type: "asset", subtype: "current" },
+    { account: "Closing Work in Progress", type: "asset", subtype: "current" },
     { account: "Opening Stock", type: "asset", subtype: "current" },
     { account: "Sales Revenue", type: "revenue", subtype: "operating" },
     { account: "Sales Returns", type: "expense", subtype: "operating" },
@@ -346,6 +366,14 @@ const toAmount = (value) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const normalizeAccountKey = (value) =>
+  String(value || "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
 const formatMoney = (value) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value || 0);
 
@@ -368,13 +396,160 @@ const INITIAL_MANUFACTURING_INPUTS = {
   returnsOutwards: "",
   closingRawMaterials: "",
   directLabour: "",
+  factoryIndirectLabor: "",
+  factoryUtilities: "",
+  depreciationFactoryEquipment: "",
   factoryExpenses: "",
+  openingWip: "",
+  closingWip: "",
 };
 
-const INITIAL_PARTNERS = [
-  { id: 1, name: "Partner A", capital: "", share: "50", drawings: "", interestOnCapital: "", salary: "" },
-  { id: 2, name: "Partner B", capital: "", share: "50", drawings: "", interestOnCapital: "", salary: "" },
+const INITIAL_PARTNERSHIP_ADJUSTMENTS = {
+  interestRate: "",
+  interestOnDrawingsRate: "",
+  salaryArrears: "",
+  prepaidExpenseAdjustment: "",
+  depreciationRate: "",
+  depreciationAsset: "Plant and Machinery",
+};
+
+const COMMON_DEPRECIABLE_ASSETS = [
+  "Plant and Machinery",
+  "Plant & Machinery",
+  "Machinery and Equipment",
+  "Property and Equipment",
+  "Factory Equipment",
+  "Motor Vehicles",
+  "Fixtures and Fittings",
 ];
+
+const MANUFACTURING_SIGNAL_ACCOUNTS = new Set([
+  "raw materials opening stock",
+  "opening raw materials",
+  "closing raw materials",
+  "opening work in progress",
+  "closing work in progress",
+  "direct labour",
+  "direct manufacturing labor",
+  "factory indirect labor",
+  "factory utilities",
+  "depreciation of factory equipment",
+  "factory expenses",
+  "factory overheads",
+]);
+
+const PARTNERSHIP_SIGNAL_ACCOUNTS = new Set([
+  "partner salary",
+  "interest on capital",
+  "partner capital",
+  "partner current account",
+  "partners capital",
+  "capital account",
+  "current account",
+]);
+
+const BUSINESS_LAYOUT_CONFIG = {
+  sole_proprietor: {
+    layoutName: "Sole Trader Layout",
+    description: "Shows only the core sole-trader flow: trading, profit and loss, capital and drawings, and statement of financial position.",
+    sections: [
+      "Trading and profit and loss account",
+      "Owner capital and drawings",
+      "Statement of financial position",
+      "Cash flow support view",
+    ],
+    inputTitle: "Sole Trader Input Sheet",
+    inputNote: "Focused on the accounts a sole trader normally needs without partnership or manufacturing schedules.",
+    statementTitle: "Sole Trader Trading and Profit & Loss Account",
+    balanceTitle: "Sole Trader Statement of Financial Position",
+    cashFlowTitle: "Sole Trader Cash Flow View",
+  },
+  partnership: {
+    layoutName: "Partnership Layout",
+    description: "Shows the partnership workflow only: trading, profit and loss, appropriation, partner sharing, and partnership financial position.",
+    sections: [
+      "Trading and profit and loss account",
+      "Profit and loss appropriation account",
+      "Partner capital and sharing schedule",
+      "Statement of financial position",
+    ],
+    inputTitle: "Partnership Input Sheet",
+    inputNote: "Focused on partnership accounts, partner salaries, interest on capital, and drawings.",
+    statementTitle: "Partnership Trading and Profit & Loss Account",
+    balanceTitle: "Partnership Statement of Financial Position",
+    cashFlowTitle: "Partnership Cash Flow View",
+  },
+  manufacturing: {
+    layoutName: "Manufacturing Layout",
+    description: "Shows the manufacturing flow only: cost of goods manufactured, trading and profit and loss, and manufacturing financial position.",
+    sections: [
+      "Manufacturing account",
+      "Trading and profit and loss account",
+      "Statement of financial position",
+      "Cash flow support view",
+    ],
+    inputTitle: "Manufacturing Input Sheet",
+    inputNote: "Focused on raw materials, factory overheads, work in progress, finished goods, and trading outputs.",
+    statementTitle: "Manufacturing Trading and Profit & Loss Account",
+    balanceTitle: "Manufacturing Statement of Financial Position",
+    cashFlowTitle: "Manufacturing Cash Flow View",
+  },
+};
+
+const MIN_PARTNER_COUNT = 2;
+const MAX_PARTNER_COUNT = 10;
+
+const getDefaultPartnerName = (index) => (index < 26 ? `Partner ${String.fromCharCode(65 + index)}` : `Partner ${index + 1}`);
+
+const createPartnerState = (id, name, share = "50") => ({
+  id,
+  name,
+  capital: "",
+  currentAccount: "",
+  share,
+  drawings: "",
+  interestOnCapital: "",
+  salary: "",
+  monthlySalary: "",
+});
+
+const INITIAL_PARTNERS = [
+  createPartnerState(1, "Partner A", "50"),
+  createPartnerState(2, "Partner B", "50"),
+];
+
+const clampPartnerCount = (value, fallback = MIN_PARTNER_COUNT) => {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.min(MAX_PARTNER_COUNT, Math.max(MIN_PARTNER_COUNT, parsed));
+};
+
+const formatSharePercent = (value) => {
+  const rounded = Number(value.toFixed(2));
+  return Number.isInteger(rounded) ? String(rounded) : String(rounded);
+};
+
+const createPartnerNameInputs = (count, existingNames = []) => {
+  const nextCount = clampPartnerCount(count);
+  return Array.from({ length: nextCount }, (_, index) => existingNames[index] || getDefaultPartnerName(index));
+};
+
+const cleanPartnerNames = (names) =>
+  (Array.isArray(names) ? names : [])
+    .map((name) => name.trim())
+    .filter(Boolean);
+
+const buildPartnersFromNames = (names = []) => {
+  const cleanedNames = cleanPartnerNames(names);
+  if (!cleanedNames.length) {
+    return INITIAL_PARTNERS.map((partner) => ({ ...partner }));
+  }
+
+  const equalShare = formatSharePercent(100 / cleanedNames.length);
+  return cleanedNames.map((name, index) => createPartnerState(index + 1, name, equalShare));
+};
 
 const createDocumentItem = () => ({
   description: "",
@@ -573,19 +748,21 @@ const normalizeLedgerRows = (rows, fallbackBusinessType = "sole_proprietor") => 
   }));
 };
 
-const normalizePartners = (partners) => {
+const normalizePartners = (partners, fallbackNames = []) => {
   if (!Array.isArray(partners) || !partners.length) {
-    return INITIAL_PARTNERS.map((partner) => ({ ...partner }));
+    return buildPartnersFromNames(fallbackNames);
   }
 
   return partners.map((partner, index) => ({
     id: partner.id ?? index + 1,
-    name: partner.name || `Partner ${String.fromCharCode(65 + index)}`,
+    name: partner.name || getDefaultPartnerName(index),
     capital: partner.capital ?? "",
+    currentAccount: partner.currentAccount ?? "",
     share: partner.share ?? "",
     drawings: partner.drawings ?? "",
     interestOnCapital: partner.interestOnCapital ?? "",
     salary: partner.salary ?? "",
+    monthlySalary: partner.monthlySalary ?? "",
   }));
 };
 
@@ -597,7 +774,7 @@ const getAccountGroupLabel = (row) => {
     return row.subtype === "non-current" ? "Non-Current Liabilities" : "Current Liabilities";
   }
   if (row.type === "expense") {
-    if (["Direct Labour", "Factory Expenses", "Factory Overheads", "Raw Materials Opening Stock", "Closing Raw Materials"].includes(row.account)) {
+    if (MANUFACTURING_SIGNAL_ACCOUNTS.has(normalizeAccountKey(row.account))) {
       return "Manufacturing Costs";
     }
     return row.subtype === "other" ? "Other Expenses" : "Operating Expenses";
@@ -609,6 +786,45 @@ const getAccountGroupLabel = (row) => {
     return "Equity";
   }
   return "Other";
+};
+
+const deriveManufacturingInputsFromRows = (rows) => {
+  const totals = rows.reduce((acc, row) => {
+    const key = (row.account || "").trim().toLowerCase();
+    if (!key) {
+      return acc;
+    }
+    acc[key] = (acc[key] || 0) + toAmount(row.amount);
+    return acc;
+  }, {});
+
+  const sumAccounts = (...names) => names.reduce((sum, name) => sum + (totals[name.toLowerCase()] || 0), 0);
+
+  return {
+    openingRawMaterials: sumAccounts("Raw Materials Opening Stock", "Opening Raw Materials") || "",
+    purchases: sumAccounts("Purchases", "Purchases of Raw Materials") || "",
+    carriageInwards: sumAccounts("Carriage Inwards") || "",
+    returnsOutwards: sumAccounts("Returns Outwards") || "",
+    closingRawMaterials: sumAccounts("Closing Raw Materials") || "",
+    directLabour: sumAccounts("Direct Labour", "Direct Manufacturing Labor") || "",
+    factoryIndirectLabor: sumAccounts("Factory Indirect Labor") || "",
+    factoryUtilities: sumAccounts("Factory Utilities") || "",
+    depreciationFactoryEquipment: sumAccounts("Depreciation of Factory Equipment") || "",
+    factoryExpenses: sumAccounts("Factory Expenses", "Factory Overheads") || "",
+    openingWip: sumAccounts("Opening Work in Progress") || "",
+    closingWip: sumAccounts("Closing Work in Progress") || "",
+  };
+};
+
+const detectBusinessTypeFromRows = (rows) => {
+  const accountNames = rows.map((row) => normalizeAccountKey(row.account));
+  if (accountNames.some((name) => MANUFACTURING_SIGNAL_ACCOUNTS.has(name))) {
+    return "manufacturing";
+  }
+  if (accountNames.some((name) => PARTNERSHIP_SIGNAL_ACCOUNTS.has(name))) {
+    return "partnership";
+  }
+  return "sole_proprietor";
 };
 
 export default function App() {
@@ -630,6 +846,12 @@ export default function App() {
   const [selectedCompanyId, setSelectedCompanyId] = useState("");
   const [newCompanyName, setNewCompanyName] = useState("");
   const [newCompanyType, setNewCompanyType] = useState("sole_proprietor");
+  const [newCompanyPartnerCount, setNewCompanyPartnerCount] = useState(MIN_PARTNER_COUNT);
+  const [newCompanyPartnerNames, setNewCompanyPartnerNames] = useState(() => createPartnerNameInputs(MIN_PARTNER_COUNT));
+  const [setupBusinessType, setSetupBusinessType] = useState("sole_proprietor");
+  const [setupPartnerCount, setSetupPartnerCount] = useState(MIN_PARTNER_COUNT);
+  const [setupPartnerNames, setSetupPartnerNames] = useState(() => createPartnerNameInputs(MIN_PARTNER_COUNT));
+  const [setupSaving, setSetupSaving] = useState(false);
 
   const [file, setFile] = useState(null);
   const [stats, setStats] = useState(null);
@@ -689,6 +911,7 @@ export default function App() {
   const [budgetTargets, setBudgetTargets] = useState(INITIAL_BUDGET_TARGETS);
   const [manufacturingInputs, setManufacturingInputs] = useState(INITIAL_MANUFACTURING_INPUTS);
   const [partners, setPartners] = useState(INITIAL_PARTNERS);
+  const [partnershipAdjustments, setPartnershipAdjustments] = useState(INITIAL_PARTNERSHIP_ADJUSTMENTS);
   const [scenarioInputs, setScenarioInputs] = useState(INITIAL_SCENARIO_INPUTS);
   const [workspaceReady, setWorkspaceReady] = useState(false);
   const [invoiceForm, setInvoiceForm] = useState(() => createInvoiceFormState());
@@ -718,11 +941,39 @@ export default function App() {
     () => QUICK_ENTRY_TEMPLATES.filter((template) => template.businessTypes.includes(businessType)),
     [businessType],
   );
+  const activeLayout = BUSINESS_LAYOUT_CONFIG[businessType] || BUSINESS_LAYOUT_CONFIG.sole_proprietor;
+  const suggestedAccountOptions = useMemo(() => {
+    const options = new Map();
+    (BUSINESS_TEMPLATE_ROWS[businessType] || []).forEach((entry) => {
+      options.set(entry.account.toLowerCase(), entry.account);
+    });
+    ledgerRows.forEach((row) => {
+      const account = (row.account || "").trim();
+      if (account) {
+        options.set(account.toLowerCase(), account);
+      }
+    });
+    return Array.from(options.values()).sort((left, right) => left.localeCompare(right));
+  }, [businessType, ledgerRows]);
+  const depreciableAssetOptions = useMemo(() => {
+    const options = new Map();
+    COMMON_DEPRECIABLE_ASSETS.forEach((name) => {
+      options.set(normalizeAccountKey(name), name);
+    });
+    ledgerRows
+      .filter((row) => row.type === "asset" && row.subtype === "non-current" && (row.account || "").trim())
+      .forEach((row) => {
+        options.set(normalizeAccountKey(row.account), row.account.trim());
+      });
+    return Array.from(options.values()).sort((left, right) => left.localeCompare(right));
+  }, [ledgerRows]);
 
   const selectedCompany = useMemo(
     () => companies.find((company) => String(company.id) === String(selectedCompanyId)) || null,
     [companies, selectedCompanyId],
   );
+  const needsCompanySetup = Boolean(selectedCompany && !selectedCompany.onboarding_complete);
+  const canConfigureCompany = ["owner", "admin"].includes(currentUser?.role || "");
   const canManageFinanceOps = ["owner", "admin", "manager", "accountant", "cashier"].includes(currentUser?.role || "");
   const canManagePayables = ["owner", "admin", "manager", "accountant"].includes(currentUser?.role || "");
 
@@ -795,7 +1046,7 @@ export default function App() {
     }
 
     const accountTotals = ledgerRows.reduce((acc, row) => {
-      const key = (row.account || "").trim().toLowerCase();
+      const key = normalizeAccountKey(row.account);
       if (!key) {
         return acc;
       }
@@ -804,9 +1055,35 @@ export default function App() {
     }, {});
 
     const amountByAccount = (...names) =>
-      names.reduce((sum, name) => sum + (accountTotals[name.toLowerCase()] || 0), 0);
+      names.reduce((sum, name) => sum + (accountTotals[normalizeAccountKey(name)] || 0), 0);
 
-    const grossSales = amountByAccount("Gross Sales", "Sales Revenue");
+    const partnershipInterestRate = businessType === "partnership" ? toAmount(partnershipAdjustments.interestRate) : 0;
+    const interestOnDrawingsRate = businessType === "partnership" ? toAmount(partnershipAdjustments.interestOnDrawingsRate) : 0;
+    const salaryArrearsAdjustment = businessType === "partnership" ? toAmount(partnershipAdjustments.salaryArrears) : 0;
+    const prepaidExpenseAdjustment = businessType === "partnership" ? toAmount(partnershipAdjustments.prepaidExpenseAdjustment) : 0;
+    const depreciationAdjustmentRate = businessType === "partnership" ? toAmount(partnershipAdjustments.depreciationRate) : 0;
+    const depreciationAdjustmentAsset = (partnershipAdjustments.depreciationAsset || "").trim();
+    const depreciationAdjustmentAssetKey = normalizeAccountKey(depreciationAdjustmentAsset);
+    const depreciationAdjustmentBase = depreciationAdjustmentAssetKey
+      ? ledgerRows.reduce((sum, row) => (
+        row.type === "asset" &&
+        row.subtype === "non-current" &&
+        normalizeAccountKey(row.account) === depreciationAdjustmentAssetKey
+          ? sum + toAmount(row.amount)
+          : sum
+      ), 0)
+      : 0;
+    const depreciationAdjustmentAmount =
+      depreciationAdjustmentRate > 0 && depreciationAdjustmentBase > 0
+        ? (depreciationAdjustmentBase * depreciationAdjustmentRate) / 100
+        : 0;
+    const adjustedNonCurrentAccumulatedDepreciation =
+      totals.nonCurrentAccumulatedDepreciation + depreciationAdjustmentAmount;
+    const adjustedNonCurrentAssets = Math.max(0, totals.assetsNonCurrentGross - adjustedNonCurrentAccumulatedDepreciation);
+    const adjustedCurrentLiabilities = totals.liabilitiesCurrent + salaryArrearsAdjustment;
+    const adjustedCurrentAssets = totals.assetsCurrent + prepaidExpenseAdjustment;
+
+    const grossSales = amountByAccount("Gross Sales", "Sales Revenue", "Sales");
     const openingStock = amountByAccount("Opening Stock");
     const closingStock = amountByAccount("Closing Stock");
     const purchases = amountByAccount("Purchases");
@@ -826,17 +1103,32 @@ export default function App() {
     const rawMaterialsReturns = toAmount(manufacturingInputs.returnsOutwards) || returnsOutwards;
     const rawMaterialsClosing =
       toAmount(manufacturingInputs.closingRawMaterials) || amountByAccount("Closing Raw Materials");
-    const directLabour = toAmount(manufacturingInputs.directLabour) || amountByAccount("Direct Labour");
+    const directLabour =
+      toAmount(manufacturingInputs.directLabour) || amountByAccount("Direct Labour", "Direct Manufacturing Labor");
+    const factoryIndirectLabor =
+      toAmount(manufacturingInputs.factoryIndirectLabor) || amountByAccount("Factory Indirect Labor");
+    const factoryUtilities =
+      toAmount(manufacturingInputs.factoryUtilities) || amountByAccount("Factory Utilities");
+    const depreciationFactoryEquipment =
+      toAmount(manufacturingInputs.depreciationFactoryEquipment) || amountByAccount("Depreciation of Factory Equipment");
     const factoryExpenses =
       toAmount(manufacturingInputs.factoryExpenses) || amountByAccount("Factory Expenses", "Factory Overheads");
     const rawMaterialsAvailable = rawMaterialsOpening + rawMaterialsPurchases + rawMaterialsCarriage - rawMaterialsReturns;
     const rawMaterialsUsed = rawMaterialsAvailable - rawMaterialsClosing;
-    const costOfProduction = rawMaterialsUsed + directLabour + factoryExpenses;
+    const primeCost = rawMaterialsUsed + directLabour;
+    const totalFactoryOverheads =
+      factoryIndirectLabor + factoryUtilities + depreciationFactoryEquipment + factoryExpenses;
+    const totalFactoryCost = primeCost + totalFactoryOverheads;
+    const openingWip =
+      toAmount(manufacturingInputs.openingWip) || amountByAccount("Opening Work in Progress");
+    const closingWip =
+      toAmount(manufacturingInputs.closingWip) || amountByAccount("Closing Work in Progress");
+    const costOfGoodsManufactured = totalFactoryCost + openingWip - closingWip;
+    const costOfProduction = costOfGoodsManufactured;
 
-    const costOfGoodsAvailable =
-      openingStock +
-      (purchases - returnsOutwards + carriageInwardsLedger) +
-      (businessType === "manufacturing" ? costOfProduction : 0);
+    const costOfGoodsAvailable = businessType === "manufacturing"
+      ? openingStock + costOfGoodsManufactured
+      : openingStock + (purchases - returnsOutwards + carriageInwardsLedger);
     const cogs = costOfGoodsAvailable - closingStock;
     const grossProfit = netSales - cogs;
     const incomeFromRevenue = netSales - cogs;
@@ -847,23 +1139,38 @@ export default function App() {
     const incomeFromOtherSources = interestReceived + rentalIncome + miscIncome;
     const grossIncome = incomeFromRevenue + incomeFromOtherSources;
 
-    const payrollExpenses = amountByAccount("Payroll Expenses");
+    const payrollExpenses =
+      amountByAccount("Payroll Expenses", "Salaries", "Salaries Expense", "Salaries and Wages", "Wages", "Wages and Salaries") +
+      salaryArrearsAdjustment;
     const advertisingExpenses = amountByAccount("Advertising Expenses");
     const marketingExpenses = amountByAccount("Marketing Expenses");
+    const motorExpenses = amountByAccount("Motor Expenses");
     const officeExpenses = amountByAccount("Office Expenses");
+    const generalExpenses = amountByAccount("General Expenses");
+    const carriageOutwards = amountByAccount("Carriage Outwards");
     const rentExpense = amountByAccount("Rent Expense");
     const utilitiesExpense = amountByAccount("Utilities Expense");
     const licenseFees = amountByAccount("License Fees");
     const interestPaidOnLoans = amountByAccount("Interest Paid on Loans");
     const insurancePremiums = amountByAccount("Insurance Premiums");
     const otherMiscExpenses = amountByAccount("Other Miscellaneous Expenses");
-    const depreciation = amountByAccount("Depreciation Expense");
+    const depreciation =
+      amountByAccount(
+        "Depreciation Expense",
+        "Depreciation on Plant and Machinery",
+        "Depreciation of Plant and Machinery",
+        "Depreciation on Plant and Equipment",
+        "Depreciation on Machinery and Equipment",
+      ) + depreciationAdjustmentAmount;
     const lossOnSale = amountByAccount("Loss on Sale of Asset");
     const totalExpensesDetailed =
       payrollExpenses +
       advertisingExpenses +
       marketingExpenses +
+      motorExpenses +
       officeExpenses +
+      generalExpenses +
+      carriageOutwards +
       rentExpense +
       utilitiesExpense +
       licenseFees +
@@ -872,7 +1179,8 @@ export default function App() {
       otherMiscExpenses +
       depreciation +
       lossOnSale +
-      badDebts;
+      badDebts -
+      prepaidExpenseAdjustment;
 
     const profitBeforeTax = grossProfit + incomeFromOtherSources - totalExpensesDetailed;
     const incomeTaxExpense = amountByAccount("Income Tax Expense");
@@ -895,54 +1203,80 @@ export default function App() {
     const increaseCurrentAssets = amountByAccount("Increase in Current Assets");
     const increaseCurrentLiabilities = amountByAccount("Increase in Current Liabilities");
     const decreaseCurrentLiabilities = amountByAccount("Decrease in Current Liabilities");
+    const adjustedIncreaseCurrentAssets = increaseCurrentAssets + prepaidExpenseAdjustment;
+    const adjustedIncreaseCurrentLiabilities = increaseCurrentLiabilities + salaryArrearsAdjustment;
     const workingCapitalAdjustments =
       decreaseCurrentAssets +
-      increaseCurrentLiabilities -
-      increaseCurrentAssets -
+      adjustedIncreaseCurrentLiabilities -
+      adjustedIncreaseCurrentAssets -
       decreaseCurrentLiabilities;
 
     const cashBalance = amountByAccount("Cash", "Cash and Cash Equivalents");
     const receivablesBalance = amountByAccount("Accounts Receivable");
     const inventoryBalance =
       amountByAccount("Inventory") +
-      amountByAccount("Closing Stock") +
-      amountByAccount("Closing Raw Materials");
-    const payablesBalance = amountByAccount("Accounts Payable", "Accrued Expenses");
+      closingStock +
+      rawMaterialsClosing +
+      closingWip;
+    const payablesBalance = amountByAccount("Accounts Payable", "Accrued Expenses") + salaryArrearsAdjustment;
 
     const cashGeneratedFromOperations = operatingProfitBeforeWorkingCapital + workingCapitalAdjustments;
     const incomeTaxesPaid = amountByAccount("Income Taxes Paid");
     const netCashFromOperations = cashGeneratedFromOperations - incomeTaxesPaid;
 
-    const appropriationInterest = partners.reduce((sum, partner) => sum + toAmount(partner.interestOnCapital), 0);
-    const appropriationSalary = partners.reduce((sum, partner) => sum + toAmount(partner.salary), 0);
-    const appropriationBase = netProfitAfterTax - appropriationInterest - appropriationSalary;
     const totalPartnerRatio = partners.reduce((sum, partner) => sum + Math.max(0, toAmount(partner.share)), 0) || 1;
     const partnerAppropriation = partners.map((partner) => {
       const ratio = Math.max(0, toAmount(partner.share));
-      const shareOfProfit = appropriationBase * (ratio / totalPartnerRatio);
-      const closingCapital =
-        toAmount(partner.capital) +
-        toAmount(partner.interestOnCapital) +
-        toAmount(partner.salary) +
+      const manualInterestAmount = toAmount(partner.interestOnCapital);
+      const interestAmount =
+        manualInterestAmount || (partnershipInterestRate > 0
+          ? (toAmount(partner.capital) * partnershipInterestRate) / 100
+          : 0);
+      const salaryAmount = toAmount(partner.salary) || (toAmount(partner.monthlySalary) * 12);
+      const interestOnDrawingsAmount = interestOnDrawingsRate > 0
+        ? (toAmount(partner.drawings) * interestOnDrawingsRate) / 100
+        : 0;
+      return {
+        ...partner,
+        ratio,
+        interestAmount,
+        salaryAmount,
+        interestOnDrawingsAmount,
+      };
+    });
+    const appropriationInterest = partnerAppropriation.reduce((sum, partner) => sum + partner.interestAmount, 0);
+    const appropriationSalary = partnerAppropriation.reduce((sum, partner) => sum + partner.salaryAmount, 0);
+    const appropriationInterestOnDrawings =
+      partnerAppropriation.reduce((sum, partner) => sum + partner.interestOnDrawingsAmount, 0);
+    const appropriationBase = netProfitAfterTax + appropriationInterestOnDrawings - appropriationInterest - appropriationSalary;
+    const settledPartnerAppropriation = partnerAppropriation.map((partner) => {
+      const shareOfProfit = appropriationBase * (partner.ratio / totalPartnerRatio);
+      const closingCurrentAccount =
+        toAmount(partner.currentAccount) +
+        partner.interestAmount +
+        partner.salaryAmount +
         shareOfProfit -
-        toAmount(partner.drawings);
+        toAmount(partner.drawings) -
+        partner.interestOnDrawingsAmount;
+      const totalEquity = toAmount(partner.capital) + closingCurrentAccount;
       return {
         ...partner,
         shareOfProfit,
-        closingCapital,
+        closingCurrentAccount,
+        totalEquity,
       };
     });
 
-    const partnershipCapital = partnerAppropriation.reduce((sum, partner) => sum + partner.closingCapital, 0);
+    const partnershipCapital = settledPartnerAppropriation.reduce((sum, partner) => sum + partner.totalEquity, 0);
     const equity =
       businessType === "partnership" ? partnershipCapital : totals.capital + netProfitAfterTax - totals.drawings;
-    const totalAssets = totals.assetsCurrent + totals.assetsNonCurrent;
-    const totalLiabilities = totals.liabilitiesCurrent + totals.liabilitiesNonCurrent;
+    const totalAssets = adjustedCurrentAssets + adjustedNonCurrentAssets;
+    const totalLiabilities = adjustedCurrentLiabilities + totals.liabilitiesNonCurrent;
     const liabilitiesAndEquity = totalLiabilities + equity;
     const operatingCashInflows = netSales + incomeFromOtherSources;
     const operatingCashOutflows = totalExpensesDetailed + incomeTaxExpense;
     const netOperatingCashFlow = operatingCashInflows - operatingCashOutflows;
-    const investingCashOutflows = totals.assetsNonCurrent;
+    const investingCashOutflows = adjustedNonCurrentAssets;
     const financingInflows = businessType === "partnership" ? partnershipCapital : totals.capital;
     const financingOutflows =
       businessType === "partnership"
@@ -953,6 +1287,10 @@ export default function App() {
     return {
       ...totals,
       businessType,
+      assetsCurrent: adjustedCurrentAssets,
+      liabilitiesCurrent: adjustedCurrentLiabilities,
+      nonCurrentAccumulatedDepreciation: adjustedNonCurrentAccumulatedDepreciation,
+      assetsNonCurrent: adjustedNonCurrentAssets,
       openingStock,
       closingStock,
       purchases,
@@ -968,7 +1306,16 @@ export default function App() {
       rawMaterialsAvailable,
       rawMaterialsUsed,
       directLabour,
+      primeCost,
+      factoryIndirectLabor,
+      factoryUtilities,
+      depreciationFactoryEquipment,
       factoryExpenses,
+      totalFactoryOverheads,
+      totalFactoryCost,
+      openingWip,
+      closingWip,
+      costOfGoodsManufactured,
       costOfProduction,
       costOfGoodsAvailable,
       grossProfit,
@@ -997,7 +1344,10 @@ export default function App() {
       payrollExpenses,
       advertisingExpenses,
       marketingExpenses,
+      motorExpenses,
       officeExpenses,
+      generalExpenses,
+      carriageOutwards,
       rentExpense,
       utilitiesExpense,
       licenseFees,
@@ -1016,10 +1366,11 @@ export default function App() {
       profitOnSale,
       operatingProfitBeforeWorkingCapital,
       decreaseCurrentAssets,
-      increaseCurrentAssets,
+      increaseCurrentAssets: adjustedIncreaseCurrentAssets,
       increaseCurrentLiabilities,
       decreaseCurrentLiabilities,
       workingCapitalAdjustments,
+      adjustedIncreaseCurrentLiabilities,
       cashGeneratedFromOperations,
       incomeTaxesPaid,
       netCashFromOperations,
@@ -1027,12 +1378,21 @@ export default function App() {
       receivablesBalance,
       inventoryBalance,
       payablesBalance,
+      partnershipInterestRate,
+      interestOnDrawingsRate,
+      salaryArrearsAdjustment,
+      prepaidExpenseAdjustment,
+      depreciationAdjustmentRate,
+      depreciationAdjustmentAsset,
+      depreciationAdjustmentBase,
+      depreciationAdjustmentAmount,
       appropriationInterest,
       appropriationSalary,
+      appropriationInterestOnDrawings,
       appropriationBase,
-      partnerAppropriation,
+      partnerAppropriation: settledPartnerAppropriation,
     };
-  }, [ledgerRows, businessType, manufacturingInputs, partners]);
+  }, [ledgerRows, businessType, manufacturingInputs, partners, partnershipAdjustments]);
 
   const statementGraphData = useMemo(
     () => [
@@ -1137,6 +1497,20 @@ export default function App() {
     } finally {
       setAuthLoading(false);
     }
+  };
+
+  const validatePartnershipNames = (names, expectedCount) => {
+    const trimmedNames = cleanPartnerNames(names);
+    if (trimmedNames.length !== clampPartnerCount(expectedCount)) {
+      throw new Error("Enter every partner name before continuing.");
+    }
+
+    const uniqueNames = new Set(trimmedNames.map((name) => name.toLowerCase()));
+    if (uniqueNames.size !== trimmedNames.length) {
+      throw new Error("Partner names must be unique.");
+    }
+
+    return trimmedNames;
   };
 
   const register = async () => {
@@ -1261,6 +1635,12 @@ export default function App() {
     setProjectCostForm(createProjectCostFormState());
     setIntegrationForm(createIntegrationFormState());
     setSelectedRegisterAccountId("");
+    setLedgerRows(INITIAL_LEDGER_ROWS);
+    setBudgetTargets(INITIAL_BUDGET_TARGETS);
+    setManufacturingInputs(INITIAL_MANUFACTURING_INPUTS);
+    setPartners(INITIAL_PARTNERS);
+    setPartnershipAdjustments(INITIAL_PARTNERSHIP_ADJUSTMENTS);
+    setScenarioInputs(INITIAL_SCENARIO_INPUTS);
     setWorkspaceReady(false);
     setInfoMessage("Signed out.");
   };
@@ -1556,17 +1936,36 @@ export default function App() {
         throw new Error("No usable ledger rows were extracted.");
       }
 
-      setLedgerRows(
-        data.ledger_rows.map((row, index) => ({
-          id: index + 1,
-          account: row.account || "",
-          type: row.type || "expense",
-          subtype: row.subtype || "operating",
-          amount: row.amount ?? "",
-          depreciation: row.depreciation ?? "",
-        })),
-      );
-      setInfoMessage(`Extracted ${data.ledger_rows.length} row(s) for calculations.`);
+      const extractedRows = data.ledger_rows.map((row, index) => ({
+        id: index + 1,
+        account: row.account || "",
+        type: row.type || "expense",
+        subtype: row.subtype || "operating",
+        amount: row.amount ?? "",
+        depreciation: row.depreciation ?? "",
+      }));
+
+      setLedgerRows(extractedRows);
+
+      const detectedBusinessType = detectBusinessTypeFromRows(extractedRows);
+      setBusinessType(detectedBusinessType);
+
+      if (detectedBusinessType === "manufacturing") {
+        setManufacturingInputs(deriveManufacturingInputsFromRows(extractedRows));
+      } else {
+        setManufacturingInputs(INITIAL_MANUFACTURING_INPUTS);
+      }
+      if (detectedBusinessType !== "partnership") {
+        setPartnershipAdjustments(INITIAL_PARTNERSHIP_ADJUSTMENTS);
+      }
+
+      const extractionContextMessage =
+        detectedBusinessType === "manufacturing" && data.summary?.costOfGoodsManufactured != null
+          ? ` COGM: ${formatMoney(data.summary.costOfGoodsManufactured)}.`
+          : detectedBusinessType === "partnership"
+            ? " Partnership layout detected."
+          : "";
+      setInfoMessage(`Extracted ${data.ledger_rows.length} row(s) for calculations.${extractionContextMessage}`);
     } catch (error) {
       setErrorMessage(error.message || "Failed to extract file for calculations");
     } finally {
@@ -1624,12 +2023,25 @@ export default function App() {
 
   const applyBusinessTemplate = () => {
     setLedgerRows(cloneTemplateRows(BUSINESS_TEMPLATE_ROWS[businessType]));
-    setInfoMessage("Business-specific input template loaded.");
+    if (businessType !== "manufacturing") {
+      setManufacturingInputs(INITIAL_MANUFACTURING_INPUTS);
+    }
+    if (businessType === "partnership") {
+      setPartnershipAdjustments(INITIAL_PARTNERSHIP_ADJUSTMENTS);
+    } else {
+      setPartners(INITIAL_PARTNERS);
+      setPartnershipAdjustments(INITIAL_PARTNERSHIP_ADJUSTMENTS);
+    }
+    setInfoMessage(`${activeLayout.layoutName} loaded.`);
     setErrorMessage("");
   };
 
   const updateManufacturingInput = (key, value) => {
     setManufacturingInputs((current) => ({ ...current, [key]: value }));
+  };
+
+  const updatePartnershipAdjustment = (key, value) => {
+    setPartnershipAdjustments((current) => ({ ...current, [key]: value }));
   };
 
   const updatePartner = (partnerId, key, value) => {
@@ -1643,7 +2055,7 @@ export default function App() {
       const nextId = items.length ? Math.max(...items.map((partner) => partner.id)) + 1 : 1;
       return [
         ...items,
-        { id: nextId, name: `Partner ${String.fromCharCode(64 + nextId)}`, capital: "", share: "", drawings: "", interestOnCapital: "", salary: "" },
+        createPartnerState(nextId, getDefaultPartnerName(nextId - 1), ""),
       ];
     });
   };
@@ -2684,12 +3096,84 @@ export default function App() {
     }
   };
 
+  const updateSetupPartnerName = (index, value) => {
+    setSetupPartnerNames((names) => names.map((name, currentIndex) => (currentIndex === index ? value : name)));
+  };
+
+  const updateNewCompanyPartnerName = (index, value) => {
+    setNewCompanyPartnerNames((names) => names.map((name, currentIndex) => (currentIndex === index ? value : name)));
+  };
+
+  const saveCompanySetup = async () => {
+    if (!selectedCompany) {
+      return;
+    }
+
+    setErrorMessage("");
+    setInfoMessage("");
+    let partnerNames = [];
+
+    try {
+      if (setupBusinessType === "partnership") {
+        partnerNames = validatePartnershipNames(setupPartnerNames, setupPartnerCount);
+      }
+
+      setSetupSaving(true);
+      const updatedCompany = await authorizedFetch(`/companies/${selectedCompany.id}/setup`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          business_type: setupBusinessType,
+          partner_names: partnerNames,
+        }),
+      });
+
+      const nextBusinessType = updatedCompany.business_type || "sole_proprietor";
+      const nextLedgerRows = cloneTemplateRows(BUSINESS_TEMPLATE_ROWS[nextBusinessType] || INITIAL_LEDGER_ROWS);
+      const nextManufacturingInputs = INITIAL_MANUFACTURING_INPUTS;
+      const nextPartners = normalizePartners([], updatedCompany.partner_names);
+
+      persistWorkspace(updatedCompany.id, {
+        businessType: nextBusinessType,
+        ledgerRows: nextLedgerRows,
+        budgetTargets: INITIAL_BUDGET_TARGETS,
+        manufacturingInputs: nextManufacturingInputs,
+        partners: nextPartners,
+        partnershipAdjustments: INITIAL_PARTNERSHIP_ADJUSTMENTS,
+        scenarioInputs: INITIAL_SCENARIO_INPUTS,
+      });
+      setBusinessType(nextBusinessType);
+      setLedgerRows(nextLedgerRows);
+      setBudgetTargets(INITIAL_BUDGET_TARGETS);
+      setManufacturingInputs(nextManufacturingInputs);
+      setPartners(nextPartners);
+      setPartnershipAdjustments(INITIAL_PARTNERSHIP_ADJUSTMENTS);
+      setScenarioInputs(INITIAL_SCENARIO_INPUTS);
+      await loadCompanies(updatedCompany.id);
+      setInfoMessage("Business setup saved. Your workspace is ready.");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to save company setup.");
+    } finally {
+      setSetupSaving(false);
+    }
+  };
+
   const createCompany = async () => {
     setErrorMessage("");
     setInfoMessage("");
 
     if (!newCompanyName.trim()) {
       setErrorMessage("Company name is required.");
+      return;
+    }
+
+    let partnerNames = [];
+    try {
+      if (newCompanyType === "partnership") {
+        partnerNames = validatePartnershipNames(newCompanyPartnerNames, newCompanyPartnerCount);
+      }
+    } catch (error) {
+      setErrorMessage(error.message || "Enter valid partner names.");
       return;
     }
 
@@ -2700,9 +3184,13 @@ export default function App() {
         body: JSON.stringify({
           name: newCompanyName.trim(),
           business_type: newCompanyType,
+          partner_names: partnerNames,
         }),
       });
       setNewCompanyName("");
+      setNewCompanyType("sole_proprietor");
+      setNewCompanyPartnerCount(MIN_PARTNER_COUNT);
+      setNewCompanyPartnerNames(createPartnerNameInputs(MIN_PARTNER_COUNT));
       setSelectedCompanyId(String(company.id));
       setBusinessType(company.business_type);
       await loadCompanies(company.id);
@@ -2939,14 +3427,21 @@ export default function App() {
       return;
     }
 
+    const companyPartnerNames = cleanPartnerNames(selectedCompany.partner_names);
+    const defaultPartnerCount = clampPartnerCount(companyPartnerNames.length || MIN_PARTNER_COUNT);
+    setSetupBusinessType(selectedCompany.business_type || "sole_proprietor");
+    setSetupPartnerCount(defaultPartnerCount);
+    setSetupPartnerNames(createPartnerNameInputs(defaultPartnerCount, companyPartnerNames));
+
     setWorkspaceReady(false);
     const savedWorkspace = readStoredWorkspace(selectedCompany.id);
-    const nextBusinessType = savedWorkspace?.businessType || selectedCompany.business_type || "sole_proprietor";
+    const nextBusinessType = selectedCompany.business_type || savedWorkspace?.businessType || "sole_proprietor";
     setBusinessType(nextBusinessType);
     setLedgerRows(normalizeLedgerRows(savedWorkspace?.ledgerRows, nextBusinessType));
     setBudgetTargets(savedWorkspace?.budgetTargets || INITIAL_BUDGET_TARGETS);
     setManufacturingInputs(savedWorkspace?.manufacturingInputs || INITIAL_MANUFACTURING_INPUTS);
-    setPartners(normalizePartners(savedWorkspace?.partners));
+    setPartners(normalizePartners(savedWorkspace?.partners, companyPartnerNames));
+    setPartnershipAdjustments(savedWorkspace?.partnershipAdjustments || INITIAL_PARTNERSHIP_ADJUSTMENTS);
     setScenarioInputs(savedWorkspace?.scenarioInputs || INITIAL_SCENARIO_INPUTS);
     setWorkspaceReady(true);
     loadDashboardStats(selectedCompany.id).catch(() => {});
@@ -2971,9 +3466,10 @@ export default function App() {
       budgetTargets,
       manufacturingInputs,
       partners,
+      partnershipAdjustments,
       scenarioInputs,
     });
-  }, [selectedCompanyId, token, workspaceReady, businessType, ledgerRows, budgetTargets, manufacturingInputs, partners, scenarioInputs]);
+  }, [selectedCompanyId, token, workspaceReady, businessType, ledgerRows, budgetTargets, manufacturingInputs, partners, partnershipAdjustments, scenarioInputs]);
 
   if (!token) {
     return (
@@ -3151,6 +3647,70 @@ export default function App() {
         {maintenance.maintenance ? <p style={themedStyles.warningText}>{maintenance.message}</p> : null}
         {errorMessage ? <p style={themedStyles.errorText}>{errorMessage}</p> : null}
         {infoMessage ? <p style={themedStyles.infoText}>{infoMessage}</p> : null}
+
+        {needsCompanySetup ? (
+          <div style={themedStyles.card}>
+            <h3>Choose Your Business Layout</h3>
+            <p style={themedStyles.graphNote}>
+              After signing in, tell the system what kind of business you are setting up so the workspace opens with the right statements and schedules from the start.
+            </p>
+            <div style={themedStyles.quickEntryGrid}>
+              <label style={themedStyles.budgetField}>
+                Business Type
+                <select
+                  value={setupBusinessType}
+                  onChange={(event) => setSetupBusinessType(event.target.value)}
+                  style={themedStyles.tableInput}
+                >
+                  {BUSINESS_TYPE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {setupBusinessType === "partnership" ? (
+                <label style={themedStyles.budgetField}>
+                  Number of Partners
+                  <input
+                    type="number"
+                    min={MIN_PARTNER_COUNT}
+                    max={MAX_PARTNER_COUNT}
+                    value={setupPartnerCount}
+                    onChange={(event) => {
+                      const nextCount = clampPartnerCount(event.target.value, setupPartnerCount);
+                      setSetupPartnerCount(nextCount);
+                      setSetupPartnerNames((names) => createPartnerNameInputs(nextCount, names));
+                    }}
+                    style={themedStyles.tableInput}
+                  />
+                </label>
+              ) : null}
+            </div>
+            {setupBusinessType === "partnership" ? (
+              <div style={themedStyles.quickEntryGrid}>
+                {setupPartnerNames.map((partnerName, index) => (
+                  <label key={`setup-partner-${index + 1}`} style={themedStyles.budgetField}>
+                    Partner {index + 1} Name
+                    <input
+                      value={partnerName}
+                      onChange={(event) => updateSetupPartnerName(index, event.target.value)}
+                      style={themedStyles.tableInput}
+                    />
+                  </label>
+                ))}
+              </div>
+            ) : null}
+            {!canConfigureCompany ? (
+              <p style={themedStyles.warningText}>An owner or admin needs to finish this company setup before the workspace can be tailored.</p>
+            ) : null}
+            <div style={themedStyles.actionRow}>
+              <button onClick={saveCompanySetup} style={themedStyles.button} disabled={setupSaving || !canConfigureCompany}>
+                {setupSaving ? "Saving..." : "Continue to Workspace"}
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         <div style={themedStyles.heroCard}>
           <div style={themedStyles.heroHeader}>
@@ -4857,29 +5417,73 @@ export default function App() {
             {BUSINESS_TYPE_OPTIONS.find((option) => option.value === businessType)?.description}
           </p>
           {(currentUser?.role === "owner" || currentUser?.role === "admin") ? (
-            <div style={themedStyles.adminCreateGrid}>
-              <input
-                placeholder="New company name"
-                value={newCompanyName}
-                onChange={(event) => setNewCompanyName(event.target.value)}
-                style={themedStyles.tableInput}
-              />
-              <select
-                value={newCompanyType}
-                onChange={(event) => setNewCompanyType(event.target.value)}
-                style={themedStyles.tableInput}
-              >
-                {BUSINESS_TYPE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              <button onClick={createCompany} style={themedStyles.button}>
-                Create Company
-              </button>
-            </div>
+            <>
+              <div style={themedStyles.adminCreateGrid}>
+                <input
+                  placeholder="New company name"
+                  value={newCompanyName}
+                  onChange={(event) => setNewCompanyName(event.target.value)}
+                  style={themedStyles.tableInput}
+                />
+                <select
+                  value={newCompanyType}
+                  onChange={(event) => setNewCompanyType(event.target.value)}
+                  style={themedStyles.tableInput}
+                >
+                  {BUSINESS_TYPE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                {newCompanyType === "partnership" ? (
+                  <input
+                    type="number"
+                    min={MIN_PARTNER_COUNT}
+                    max={MAX_PARTNER_COUNT}
+                    value={newCompanyPartnerCount}
+                    onChange={(event) => {
+                      const nextCount = clampPartnerCount(event.target.value, newCompanyPartnerCount);
+                      setNewCompanyPartnerCount(nextCount);
+                      setNewCompanyPartnerNames((names) => createPartnerNameInputs(nextCount, names));
+                    }}
+                    style={themedStyles.tableInput}
+                    placeholder="Partners"
+                  />
+                ) : null}
+                <button onClick={createCompany} style={themedStyles.button}>
+                  Create Company
+                </button>
+              </div>
+              {newCompanyType === "partnership" ? (
+                <div style={themedStyles.quickEntryGrid}>
+                  {newCompanyPartnerNames.map((partnerName, index) => (
+                    <label key={`new-company-partner-${index + 1}`} style={themedStyles.budgetField}>
+                      Partner {index + 1} Name
+                      <input
+                        value={partnerName}
+                        onChange={(event) => updateNewCompanyPartnerName(index, event.target.value)}
+                        style={themedStyles.tableInput}
+                      />
+                    </label>
+                  ))}
+                </div>
+              ) : null}
+            </>
           ) : null}
+        </div>
+
+        <div style={themedStyles.card}>
+          <h3>{activeLayout.layoutName}</h3>
+          <p style={themedStyles.graphNote}>{activeLayout.description}</p>
+          <div style={themedStyles.kpiGrid}>
+            {activeLayout.sections.map((section) => (
+              <div key={section} style={themedStyles.kpiItem}>
+                <strong>{section}</strong>
+                <div style={themedStyles.updateIndicator}>Visible for this business type only.</div>
+              </div>
+            ))}
+          </div>
         </div>
 
         <div style={themedStyles.card}>
@@ -4888,7 +5492,7 @@ export default function App() {
             accept=".csv,.txt,.json,.xls,.xlsx,.pdf,.doc,.docx"
             onChange={(event) => setFile(event.target.files?.[0] || null)}
           />
-          <p style={themedStyles.graphNote}>Upload external files for analytics or ledger calculations.</p>
+          <p style={themedStyles.graphNote}>Upload external files for analytics or ledger calculations, including stacked trial balances and manufacturing schedules with particulars/subtotal layouts.</p>
           <div style={themedStyles.actionRow}>
             <button onClick={analyze} style={themedStyles.button} disabled={loading || maintenance.maintenance}>
               {loading ? "Processing..." : "Generate Report"}
@@ -4953,9 +5557,10 @@ export default function App() {
 
         <div style={themedStyles.card}>
           <div style={themedStyles.statementHeader}>
-            <h3>Financial Input Sheet</h3>
+            <h3>{activeLayout.inputTitle}</h3>
             <button onClick={addLedgerRow} style={themedStyles.button}>Add Row</button>
           </div>
+          <p style={themedStyles.graphNote}>{activeLayout.inputNote}</p>
           <div style={themedStyles.tableWrap}>
             <table style={themedStyles.table}>
               <thead>
@@ -5038,8 +5643,13 @@ export default function App() {
               </tbody>
             </table>
             <datalist id="account-options">
-              {ACCOUNT_CATALOG.map((option) => (
-                <option key={option.account} value={option.account} />
+              {suggestedAccountOptions.map((account) => (
+                <option key={account} value={account} />
+              ))}
+            </datalist>
+            <datalist id="depreciable-asset-options">
+              {depreciableAssetOptions.map((account) => (
+                <option key={account} value={account} />
               ))}
             </datalist>
           </div>
@@ -5060,36 +5670,246 @@ export default function App() {
 
         {businessType === "manufacturing" ? (
           <div style={themedStyles.card}>
+            <h3>Manufacturing Drivers</h3>
+            <p style={themedStyles.graphNote}>
+              Enter or override raw-material, overhead, and WIP values directly. Uploaded manufacturing schedules will prefill these fields automatically.
+            </p>
+            <div style={themedStyles.quickEntryGrid}>
+              <label style={themedStyles.budgetField}>
+                Opening Raw Materials
+                <input type="number" step="0.01" value={manufacturingInputs.openingRawMaterials} onChange={(event) => updateManufacturingInput("openingRawMaterials", event.target.value)} style={themedStyles.tableInput} />
+              </label>
+              <label style={themedStyles.budgetField}>
+                Purchases of Raw Materials
+                <input type="number" step="0.01" value={manufacturingInputs.purchases} onChange={(event) => updateManufacturingInput("purchases", event.target.value)} style={themedStyles.tableInput} />
+              </label>
+              <label style={themedStyles.budgetField}>
+                Carriage Inwards
+                <input type="number" step="0.01" value={manufacturingInputs.carriageInwards} onChange={(event) => updateManufacturingInput("carriageInwards", event.target.value)} style={themedStyles.tableInput} />
+              </label>
+              <label style={themedStyles.budgetField}>
+                Returns Outwards
+                <input type="number" step="0.01" value={manufacturingInputs.returnsOutwards} onChange={(event) => updateManufacturingInput("returnsOutwards", event.target.value)} style={themedStyles.tableInput} />
+              </label>
+              <label style={themedStyles.budgetField}>
+                Closing Raw Materials
+                <input type="number" step="0.01" value={manufacturingInputs.closingRawMaterials} onChange={(event) => updateManufacturingInput("closingRawMaterials", event.target.value)} style={themedStyles.tableInput} />
+              </label>
+              <label style={themedStyles.budgetField}>
+                Direct Manufacturing Labor
+                <input type="number" step="0.01" value={manufacturingInputs.directLabour} onChange={(event) => updateManufacturingInput("directLabour", event.target.value)} style={themedStyles.tableInput} />
+              </label>
+              <label style={themedStyles.budgetField}>
+                Factory Indirect Labor
+                <input type="number" step="0.01" value={manufacturingInputs.factoryIndirectLabor} onChange={(event) => updateManufacturingInput("factoryIndirectLabor", event.target.value)} style={themedStyles.tableInput} />
+              </label>
+              <label style={themedStyles.budgetField}>
+                Factory Utilities
+                <input type="number" step="0.01" value={manufacturingInputs.factoryUtilities} onChange={(event) => updateManufacturingInput("factoryUtilities", event.target.value)} style={themedStyles.tableInput} />
+              </label>
+              <label style={themedStyles.budgetField}>
+                Depreciation of Factory Equipment
+                <input type="number" step="0.01" value={manufacturingInputs.depreciationFactoryEquipment} onChange={(event) => updateManufacturingInput("depreciationFactoryEquipment", event.target.value)} style={themedStyles.tableInput} />
+              </label>
+              <label style={themedStyles.budgetField}>
+                Other Factory Overheads
+                <input type="number" step="0.01" value={manufacturingInputs.factoryExpenses} onChange={(event) => updateManufacturingInput("factoryExpenses", event.target.value)} style={themedStyles.tableInput} />
+              </label>
+              <label style={themedStyles.budgetField}>
+                Opening Work in Progress
+                <input type="number" step="0.01" value={manufacturingInputs.openingWip} onChange={(event) => updateManufacturingInput("openingWip", event.target.value)} style={themedStyles.tableInput} />
+              </label>
+              <label style={themedStyles.budgetField}>
+                Closing Work in Progress
+                <input type="number" step="0.01" value={manufacturingInputs.closingWip} onChange={(event) => updateManufacturingInput("closingWip", event.target.value)} style={themedStyles.tableInput} />
+              </label>
+            </div>
+          </div>
+        ) : null}
+
+        {businessType === "manufacturing" ? (
+          <div style={themedStyles.card}>
             <h3>Manufacturing Account</h3>
             <p>Opening Raw Materials: {formatMoney(statement.rawMaterialsOpening)}</p>
-            <p>Purchases: {formatMoney(statement.rawMaterialsPurchases)}</p>
+            <p>Add: Purchases of Raw Materials: {formatMoney(statement.rawMaterialsPurchases)}</p>
             <p>Carriage Inwards: {formatMoney(statement.rawMaterialsCarriage)}</p>
-            <p>Returns Outwards: {formatMoney(statement.rawMaterialsReturns)}</p>
-            <p>Closing Raw Materials: {formatMoney(statement.rawMaterialsClosing)}</p>
-            <p>Raw Materials Used: {formatMoney(statement.rawMaterialsUsed)}</p>
-            <p>Direct Labour: {formatMoney(statement.directLabour)}</p>
-            <p>Factory Expenses: {formatMoney(statement.factoryExpenses)}</p>
-            <p style={themedStyles.totalLine}>Cost of Production: {formatMoney(statement.costOfProduction)}</p>
+            <p>Less: Returns Outwards: {formatMoney(statement.rawMaterialsReturns)}</p>
+            <p>Less: Closing Raw Materials: {formatMoney(statement.rawMaterialsClosing)}</p>
+            <p style={themedStyles.totalLine}>Cost of Raw Materials Consumed: {formatMoney(statement.rawMaterialsUsed)}</p>
+            <p>Add: Direct Manufacturing Labor: {formatMoney(statement.directLabour)}</p>
+            <p style={themedStyles.totalLine}>Prime Cost: {formatMoney(statement.primeCost)}</p>
+            <hr />
+            <p style={themedStyles.sectionLine}>Factory Overheads</p>
+            <p>Factory Indirect Labor: {formatMoney(statement.factoryIndirectLabor)}</p>
+            <p>Factory Utilities: {formatMoney(statement.factoryUtilities)}</p>
+            <p>Depreciation of Factory Equipment: {formatMoney(statement.depreciationFactoryEquipment)}</p>
+            <p>Other Factory Overheads: {formatMoney(statement.factoryExpenses)}</p>
+            <p style={themedStyles.totalLine}>Total Factory Overheads: {formatMoney(statement.totalFactoryOverheads)}</p>
+            <p style={themedStyles.totalLine}>Total Factory Cost: {formatMoney(statement.totalFactoryCost)}</p>
+            <p>Add: Opening Work in Progress (WIP): {formatMoney(statement.openingWip)}</p>
+            <p>Less: Closing Work in Progress (WIP): {formatMoney(statement.closingWip)}</p>
+            <p style={themedStyles.totalLine}>Cost of Goods Manufactured: {formatMoney(statement.costOfGoodsManufactured)}</p>
+          </div>
+        ) : null}
+
+        {businessType === "partnership" ? (
+          <div style={themedStyles.card}>
+            <h3>Partnership Terms and Adjustments</h3>
+            <p style={themedStyles.graphNote}>
+              Use this for partnership questions with profit-sharing ratios, monthly partner salaries, interest on capital, salary arrears, and depreciation on a selected fixed asset.
+            </p>
+            <div style={themedStyles.quickEntryGrid}>
+              <label style={themedStyles.budgetField}>
+                Interest on Capital % p.a.
+                <input
+                  type="number"
+                  step="0.01"
+                  value={partnershipAdjustments.interestRate}
+                  onChange={(event) => updatePartnershipAdjustment("interestRate", event.target.value)}
+                  style={themedStyles.tableInput}
+                />
+              </label>
+              <label style={themedStyles.budgetField}>
+                Interest on Drawings % p.a.
+                <input
+                  type="number"
+                  step="0.01"
+                  value={partnershipAdjustments.interestOnDrawingsRate}
+                  onChange={(event) => updatePartnershipAdjustment("interestOnDrawingsRate", event.target.value)}
+                  style={themedStyles.tableInput}
+                />
+              </label>
+              <label style={themedStyles.budgetField}>
+                Salary Arrears
+                <input
+                  type="number"
+                  step="0.01"
+                  value={partnershipAdjustments.salaryArrears}
+                  onChange={(event) => updatePartnershipAdjustment("salaryArrears", event.target.value)}
+                  style={themedStyles.tableInput}
+                />
+              </label>
+              <label style={themedStyles.budgetField}>
+                Prepaid Insurance / Expense
+                <input
+                  type="number"
+                  step="0.01"
+                  value={partnershipAdjustments.prepaidExpenseAdjustment}
+                  onChange={(event) => updatePartnershipAdjustment("prepaidExpenseAdjustment", event.target.value)}
+                  style={themedStyles.tableInput}
+                />
+              </label>
+              <label style={themedStyles.budgetField}>
+                Depreciation Rate %
+                <input
+                  type="number"
+                  step="0.01"
+                  value={partnershipAdjustments.depreciationRate}
+                  onChange={(event) => updatePartnershipAdjustment("depreciationRate", event.target.value)}
+                  style={themedStyles.tableInput}
+                />
+              </label>
+              <label style={themedStyles.budgetField}>
+                Depreciable Asset
+                <input
+                  list="depreciable-asset-options"
+                  value={partnershipAdjustments.depreciationAsset}
+                  onChange={(event) => updatePartnershipAdjustment("depreciationAsset", event.target.value)}
+                  style={themedStyles.tableInput}
+                />
+              </label>
+            </div>
+            <p style={themedStyles.updateIndicator}>
+              Depreciation basis: {formatMoney(statement.depreciationAdjustmentBase)} at {statement.depreciationAdjustmentRate || 0}% =
+              {" "}
+              {formatMoney(statement.depreciationAdjustmentAmount)}
+            </p>
+            <p style={themedStyles.updateIndicator}>
+              Interest on drawings at {statement.interestOnDrawingsRate || 0}% = {formatMoney(statement.appropriationInterestOnDrawings)}. Prepaid expense moved to current assets: {formatMoney(statement.prepaidExpenseAdjustment)}.
+            </p>
+          </div>
+        ) : null}
+
+        {businessType === "partnership" ? (
+          <div style={themedStyles.card}>
+            <div style={themedStyles.statementHeader}>
+              <h3>Partner Capital Layout</h3>
+              <button onClick={addPartner} style={themedStyles.button}>Add Partner</button>
+            </div>
+            <p style={themedStyles.graphNote}>
+              This partnership workspace now supports fixed capital, opening current accounts, ratio units, monthly partner salaries, manual overrides, and appropriation schedules.
+            </p>
+            <div style={themedStyles.tableWrap}>
+              <table style={themedStyles.table}>
+                <thead>
+                  <tr>
+                    <th style={themedStyles.th}>Partner</th>
+                    <th style={themedStyles.th}>Fixed Capital</th>
+                    <th style={themedStyles.th}>Opening Current A/C</th>
+                    <th style={themedStyles.th}>Ratio Units</th>
+                    <th style={themedStyles.th}>Drawings</th>
+                    <th style={themedStyles.th}>Monthly Salary</th>
+                    <th style={themedStyles.th}>Annual Salary Override</th>
+                    <th style={themedStyles.th}>Interest Override</th>
+                    <th style={themedStyles.th}>Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {partners.map((partner) => (
+                    <tr key={partner.id}>
+                      <td style={themedStyles.td}>
+                        <input value={partner.name} onChange={(event) => updatePartner(partner.id, "name", event.target.value)} style={themedStyles.tableInput} />
+                      </td>
+                      <td style={themedStyles.td}>
+                        <input type="number" step="0.01" value={partner.capital} onChange={(event) => updatePartner(partner.id, "capital", event.target.value)} style={themedStyles.tableInput} />
+                      </td>
+                      <td style={themedStyles.td}>
+                        <input type="number" step="0.01" value={partner.currentAccount} onChange={(event) => updatePartner(partner.id, "currentAccount", event.target.value)} style={themedStyles.tableInput} />
+                      </td>
+                      <td style={themedStyles.td}>
+                        <input type="number" step="0.01" value={partner.share} onChange={(event) => updatePartner(partner.id, "share", event.target.value)} style={themedStyles.tableInput} />
+                      </td>
+                      <td style={themedStyles.td}>
+                        <input type="number" step="0.01" value={partner.drawings} onChange={(event) => updatePartner(partner.id, "drawings", event.target.value)} style={themedStyles.tableInput} />
+                      </td>
+                      <td style={themedStyles.td}>
+                        <input type="number" step="0.01" value={partner.monthlySalary} onChange={(event) => updatePartner(partner.id, "monthlySalary", event.target.value)} style={themedStyles.tableInput} />
+                      </td>
+                      <td style={themedStyles.td}>
+                        <input type="number" step="0.01" value={partner.salary} onChange={(event) => updatePartner(partner.id, "salary", event.target.value)} style={themedStyles.tableInput} />
+                      </td>
+                      <td style={themedStyles.td}>
+                        <input type="number" step="0.01" value={partner.interestOnCapital} onChange={(event) => updatePartner(partner.id, "interestOnCapital", event.target.value)} style={themedStyles.tableInput} />
+                      </td>
+                      <td style={themedStyles.td}>
+                        <button onClick={() => removePartner(partner.id)} style={themedStyles.deleteButton}>Remove</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         ) : null}
 
         {businessType === "partnership" ? (
           <div style={themedStyles.card}>
             <h3>Profit and Loss Appropriation</h3>
-            <p>Net Profit: {formatMoney(statement.netProfitAfterTax)}</p>
-            <p>Interest on Capital: {formatMoney(statement.appropriationInterest)}</p>
+            <p>Net Profit Before Appropriation: {formatMoney(statement.netProfitAfterTax)}</p>
+            <p>Add: Interest on Drawings @ {statement.interestOnDrawingsRate || 0}%: {formatMoney(statement.appropriationInterestOnDrawings)}</p>
+            <p>Interest on Capital @ {statement.partnershipInterestRate || 0}%: {formatMoney(statement.appropriationInterest)}</p>
             <p>Partner Salaries: {formatMoney(statement.appropriationSalary)}</p>
             <p style={themedStyles.totalLine}>Profit Available for Sharing: {formatMoney(statement.appropriationBase)}</p>
             {statement.partnerAppropriation.map((partner) => (
               <p key={partner.id}>
-                {partner.name}: {formatMoney(partner.shareOfProfit)}
+                {partner.name}: Share {formatMoney(partner.shareOfProfit)} | Interest {formatMoney(partner.interestAmount)} | Salary {formatMoney(partner.salaryAmount)} | Interest on Drawings {formatMoney(partner.interestOnDrawingsAmount)} | Closing Current A/C {formatMoney(partner.closingCurrentAccount)} | Total Equity {formatMoney(partner.totalEquity)}
               </p>
             ))}
           </div>
         ) : null}
 
         <div style={themedStyles.card}>
-          <h3>Profit and Loss Statement</h3>
+          <h3>{activeLayout.statementTitle}</h3>
           <p style={themedStyles.sectionLine}>Income</p>
           <p>Gross Sales: {formatMoney(statement.grossSales)}</p>
           <p>Less: Goods Return: {formatMoney(statement.goodsReturn)}</p>
@@ -5107,6 +5927,9 @@ export default function App() {
           <hr />
           <p style={themedStyles.sectionLine}>Expenses</p>
           <p>Payroll Expenses: {formatMoney(statement.payrollExpenses)}</p>
+          {businessType === "partnership" ? (
+            <p>Included Salary Arrears Adjustment: {formatMoney(statement.salaryArrearsAdjustment)}</p>
+          ) : null}
           <p>Advertising Expenses: {formatMoney(statement.advertisingExpenses)}</p>
           <p>Marketing Expenses: {formatMoney(statement.marketingExpenses)}</p>
           <p>Office Expenses: {formatMoney(statement.officeExpenses)}</p>
@@ -5115,6 +5938,11 @@ export default function App() {
           <p>Interest Paid on Loans: {formatMoney(statement.interestPaidOnLoans)}</p>
           <p>Insurance Premiums: {formatMoney(statement.insurancePremiums)}</p>
           <p>Other Miscellaneous Expenses: {formatMoney(statement.otherMiscExpenses)}</p>
+          {businessType === "partnership" ? (
+            <p>
+              Depreciation on {statement.depreciationAdjustmentAsset || "selected asset"}: {formatMoney(statement.depreciationAdjustmentAmount)}
+            </p>
+          ) : null}
           <p style={themedStyles.totalLine}>Total Expenses: {formatMoney(statement.totalExpensesDetailed)}</p>
           <hr />
           <p style={themedStyles.totalLine}>Profit Before Taxes: {formatMoney(statement.profitBeforeTax)}</p>
@@ -5123,9 +5951,12 @@ export default function App() {
         </div>
 
         <div style={themedStyles.card}>
-          <h3>Balance Sheet</h3>
+          <h3>{activeLayout.balanceTitle}</h3>
           <p style={themedStyles.sectionLine}>Assets</p>
           <p>Current Assets: {formatMoney(statement.assetsCurrent)}</p>
+          {businessType === "partnership" ? (
+            <p>Prepaid Expense Included in Current Assets: {formatMoney(statement.prepaidExpenseAdjustment)}</p>
+          ) : null}
           <p>Non-Current Assets (Gross): {formatMoney(statement.assetsNonCurrentGross)}</p>
           <p>Less: Accumulated Depreciation: {formatMoney(statement.nonCurrentAccumulatedDepreciation)}</p>
           <p>Non-Current Assets (Net): {formatMoney(statement.assetsNonCurrent)}</p>
@@ -5133,6 +5964,9 @@ export default function App() {
           <hr />
           <p style={themedStyles.sectionLine}>Liabilities and Equity</p>
           <p>Current Liabilities: {formatMoney(statement.liabilitiesCurrent)}</p>
+          {businessType === "partnership" ? (
+            <p>Salary Arrears Included in Current Liabilities: {formatMoney(statement.salaryArrearsAdjustment)}</p>
+          ) : null}
           <p>Non-Current Liabilities: {formatMoney(statement.liabilitiesNonCurrent)}</p>
           <p>Total Liabilities: {formatMoney(statement.totalLiabilities)}</p>
           <p>Equity (Capital + Profit - Drawings): {formatMoney(statement.equity)}</p>
@@ -5143,7 +5977,7 @@ export default function App() {
         </div>
 
         <div style={themedStyles.card}>
-          <h3>Statement of Cash Flows (Operating Activities)</h3>
+          <h3>{activeLayout.cashFlowTitle}</h3>
           <p>I. Net profit before taxation: {formatMoney(statement.profitBeforeTax)}</p>
           <p style={themedStyles.sectionLine}>II. Adjustments related to non-cash and non-operating items</p>
           <p>Add: Depreciation on Fixed Assets: {formatMoney(statement.depreciation)}</p>
@@ -5158,7 +5992,7 @@ export default function App() {
           <hr />
           <p style={themedStyles.sectionLine}>III. Adjustments related to current assets and current liabilities</p>
           <p>Add: Decrease in Current Assets: {formatMoney(statement.decreaseCurrentAssets)}</p>
-          <p>Add: Increase in Current Liabilities: {formatMoney(statement.increaseCurrentLiabilities)}</p>
+          <p>Add: Increase in Current Liabilities: {formatMoney(statement.adjustedIncreaseCurrentLiabilities)}</p>
           <p>Less: Increase in Current Assets: {formatMoney(statement.increaseCurrentAssets)}</p>
           <p>Less: Decrease in Current Liabilities: {formatMoney(statement.decreaseCurrentLiabilities)}</p>
           <p style={themedStyles.totalLine}>Working Capital Adjustment: {formatMoney(statement.workingCapitalAdjustments)}</p>

@@ -32,10 +32,18 @@ def client(backend_module):
     return app.test_client()
 
 
-def register_and_login(client, email="owner@example.com", password="secret123"):
+def register_and_login(client, email="owner@example.com", password="secret123", register_overrides=None):
+    register_payload = {
+        "org": "Acme",
+        "email": email,
+        "password": password,
+    }
+    if register_overrides:
+        register_payload.update(register_overrides)
+
     register_response = client.post(
         "/register",
-        json={"org": "Acme", "email": email, "password": password},
+        json=register_payload,
     )
     assert register_response.status_code == 200
 
@@ -54,6 +62,11 @@ def test_register_and_login_success(client):
     token = register_and_login(client)
     assert token
 
+    headers = {"Authorization": f"Bearer {token}"}
+    companies_response = client.get("/companies", headers=headers)
+    assert companies_response.status_code == 200
+    assert companies_response.get_json()[0]["onboarding_complete"] is False
+
 
 def test_register_duplicate_email_conflict(client):
     register_and_login(client)
@@ -65,6 +78,70 @@ def test_register_duplicate_email_conflict(client):
 
     assert duplicate_response.status_code == 409
     assert duplicate_response.get_json()["error"] == "email already exists"
+
+
+def test_register_partnership_persists_partner_names(client):
+    token = register_and_login(
+        client,
+        email="partners@example.com",
+        register_overrides={
+            "org": "Alpha Partners",
+            "business_type": "partnership",
+            "partner_names": ["Ada Mwangi", "Brian Otieno", "Chao Wanjiku"],
+        },
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+
+    companies_response = client.get("/companies", headers=headers)
+
+    assert companies_response.status_code == 200
+    companies = companies_response.get_json()
+    assert len(companies) == 1
+    assert companies[0]["business_type"] == "partnership"
+    assert companies[0]["partner_count"] == 3
+    assert companies[0]["partner_names"] == ["Ada Mwangi", "Brian Otieno", "Chao Wanjiku"]
+    assert companies[0]["onboarding_complete"] is True
+
+
+def test_register_partnership_requires_two_names(client):
+    response = client.post(
+        "/register",
+        json={
+            "org": "Solo Partner LLP",
+            "email": "solo-partner@example.com",
+            "password": "secret123",
+            "business_type": "partnership",
+            "partner_names": ["Only One"],
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.get_json()["error"] == "partnerships require at least two partner names"
+
+
+def test_company_setup_updates_default_company_after_login(client):
+    token = register_and_login(client, email="setup@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    companies_response = client.get("/companies", headers=headers)
+    assert companies_response.status_code == 200
+    company = companies_response.get_json()[0]
+    assert company["onboarding_complete"] is False
+
+    setup_response = client.put(
+        f"/companies/{company['id']}/setup",
+        headers=headers,
+        json={
+            "business_type": "partnership",
+            "partner_names": ["Alice Njeri", "Brian Kiptoo"],
+        },
+    )
+
+    assert setup_response.status_code == 200
+    updated_company = setup_response.get_json()
+    assert updated_company["business_type"] == "partnership"
+    assert updated_company["partner_names"] == ["Alice Njeri", "Brian Kiptoo"]
+    assert updated_company["onboarding_complete"] is True
 
 
 def test_analytics_requires_auth(client):
@@ -137,6 +214,188 @@ def test_analyze_non_current_asset_with_depreciation(client):
     assert payload["assets_current"] == 200.0
     assert payload["total_assets"] == 950.0
     assert payload["liabilities_current"] == 150.0
+
+
+def test_normalize_trial_balance_stacked_layout(backend_module):
+    df = backend_module.pd.DataFrame(
+        {
+            0: [
+                "Stock 1 October 19x8",
+                23680,
+                "Carriage outwards",
+                2000,
+                "Carriage inwards",
+                3100,
+                "Returns inwards",
+                2050,
+                "Returns outwards",
+                3220,
+                "Purchases",
+                118740,
+                "Sales",
+                186000,
+                "Salaries and wages",
+                38620,
+                "Rent",
+                3040,
+                "Insurance",
+                780,
+                "Motor expenses",
+                6640,
+                "Office expenses",
+                2160,
+                "Lighting and heating expenses",
+                1660,
+                "General expenses",
+                3140,
+                "Premises",
+                50000,
+                "Motor vehicles",
+                18000,
+                "Fixtures and fittings",
+                3500,
+                "Debtors",
+                38960,
+                "Creditors",
+                17310,
+                "Cash at bank",
+                1820,
+                "Drawings",
+                12000,
+                "Capital",
+                126360,
+            ]
+        }
+    )
+
+    normalized = backend_module.normalize_ledger_dataframe(df)
+    rows = {row["account"]: row for row in normalized.to_dict(orient="records")}
+
+    assert rows["Opening Stock"]["amount"] == 23680.0
+    assert rows["Opening Stock"]["type"] == "asset"
+    assert rows["Sales Revenue"]["amount"] == 186000.0
+    assert rows["Accounts Payable"]["amount"] == 17310.0
+    assert rows["Owner Capital"]["type"] == "capital"
+    assert rows["Drawings"]["type"] == "drawings"
+
+    summary = backend_module.calc(normalized)
+    assert summary["revenue"] == 186000.0
+    assert summary["expenses"] == 185150.0
+    assert summary["assets_current"] == 64460.0
+    assert summary["assets_non_current_gross"] == 71500.0
+    assert summary["total_liabilities"] == 17310.0
+
+
+def test_extract_ledger_accepts_trial_balance_xlsx(client):
+    openpyxl = pytest.importorskip("openpyxl")
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+
+    stacked_rows = [
+        "Stock 1 October 19x8",
+        23680,
+        "Carriage outwards",
+        2000,
+        "Carriage inwards",
+        3100,
+        "Returns inwards",
+        2050,
+        "Returns outwards",
+        3220,
+        "Purchases",
+        118740,
+        "Sales",
+        186000,
+        "Salaries and wages",
+        38620,
+        "Rent",
+        3040,
+        "Insurance",
+        780,
+        "Premises",
+        50000,
+        "Debtors",
+        38960,
+        "Creditors",
+        17310,
+        "Cash at bank",
+        1820,
+        "Capital",
+        126360,
+    ]
+    for index, value in enumerate(stacked_rows, start=1):
+        sheet[f"A{index}"] = value
+
+    payload = io.BytesIO()
+    workbook.save(payload)
+    payload.seek(0)
+
+    token = register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+    response = client.post(
+        "/extract-ledger",
+        headers=headers,
+        data={"file": (payload, "trial.xlsx")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    extracted = response.get_json()
+    assert extracted["summary"]["revenue"] == 186000.0
+    assert extracted["summary"]["assets_current"] == 64460.0
+    assert any(row["account"] == "Opening Stock" and row["amount"] == 23680.0 for row in extracted["ledger_rows"])
+    assert any(row["account"] == "Owner Capital" and row["amount"] == 126360.0 for row in extracted["ledger_rows"])
+
+
+def test_extract_ledger_accepts_manufacturing_schedule_csv(client):
+    token = register_and_login(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    csv_bytes = io.BytesIO(
+        (
+            "Particulars,$000,$000_2\n"
+            "Opening Raw Materials,40,\n"
+            "Add: Purchases of Raw Materials,210,\n"
+            "Less: Closing Raw Materials,(50),\n"
+            "Cost of Raw Materials Consumed,,200\n"
+            "Add: Direct Manufacturing Labor,,150\n"
+            "PRIME COST,,350\n"
+            "Factory Overheads:,,\n"
+            "Factory Indirect Labor,45,\n"
+            "Factory Utilities ($30 + $5 accrued),35,\n"
+            "Depreciation of Factory Equipment,25,\n"
+            "Total Factory Overheads,,105\n"
+            ",,455\n"
+            "Add: Opening Work in Progress (WIP),,30\n"
+            "Less: Closing Work in Progress (WIP),,(40)\n"
+            "COST OF GOODS MANUFACTURED,,445\n"
+        ).encode("utf-8")
+    )
+
+    response = client.post(
+        "/extract-ledger",
+        headers=headers,
+        data={"file": (csv_bytes, "manufacturing_schedule.csv")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    rows = {row["account"]: row for row in payload["ledger_rows"]}
+
+    assert "Cost of Raw Materials Consumed" not in rows
+    assert rows["Raw Materials Opening Stock"]["amount"] == 40.0
+    assert rows["Closing Raw Materials"]["amount"] == 50.0
+    assert rows["Direct Manufacturing Labor"]["amount"] == 150.0
+    assert rows["Factory Indirect Labor"]["amount"] == 45.0
+    assert rows["Factory Utilities"]["amount"] == 35.0
+    assert rows["Depreciation of Factory Equipment"]["amount"] == 25.0
+    assert rows["Opening Work in Progress"]["amount"] == 30.0
+    assert rows["Closing Work in Progress"]["amount"] == 40.0
+    assert payload["summary"]["rawMaterialsConsumed"] == 200.0
+    assert payload["summary"]["primeCost"] == 350.0
+    assert payload["summary"]["totalFactoryOverheads"] == 105.0
+    assert payload["summary"]["costOfGoodsManufactured"] == 445.0
 
 
 def test_invoice_receivables_and_tax_workflow(client):

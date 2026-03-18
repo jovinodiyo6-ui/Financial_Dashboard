@@ -12,6 +12,7 @@ import datetime
 import json
 import os
 import pandas as pd
+import re
 import urllib.request
 import urllib.error
 from dotenv import load_dotenv
@@ -131,6 +132,20 @@ class Company(db.Model):
     org_id = db.Column(db.Integer, nullable=False)
     name = db.Column(db.String(120), nullable=False)
     business_type = db.Column(db.String(50), nullable=False, default="sole_proprietor")
+
+
+class CompanyPartner(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    company_id = db.Column(db.Integer, nullable=False)
+    name = db.Column(db.String(120), nullable=False)
+    display_order = db.Column(db.Integer, nullable=False, default=1)
+
+
+class CompanyOnboardingState(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    company_id = db.Column(db.Integer, unique=True, nullable=False)
+    is_configured = db.Column(db.Boolean, nullable=False, default=False)
+    configured_at = db.Column(db.DateTime(timezone=True), nullable=True)
 
 
 class APIKey(db.Model):
@@ -789,6 +804,7 @@ VALID_RECONCILIATION_ACTIONS = {"suggest_account", "flag_exception"}
 VALID_TAX_FILING_TYPES = {"indirect_tax", "income_tax", "payroll_tax"}
 VALID_PAY_TYPES = {"hourly", "salary"}
 VALID_INTEGRATION_STATUSES = {"available", "connected", "attention"}
+VALID_BUSINESS_TYPES = {"sole_proprietor", "partnership", "manufacturing"}
 INTEGRATION_CATALOG = [
     {"provider": "plaid", "category": "banking", "description": "Direct bank feeds and transaction sync."},
     {"provider": "stripe", "category": "payments", "description": "Card payments and customer collections."},
@@ -1005,6 +1021,90 @@ def get_or_create_default_company(org_id, name="Main Company"):
     seed_integration_connections(company)
     safe_commit()
     return company
+
+
+def normalize_business_type(raw_value):
+    business_type = str(raw_value or "sole_proprietor").strip().lower()
+    if business_type not in VALID_BUSINESS_TYPES:
+        return None
+    return business_type
+
+
+def normalize_partner_names(raw_value):
+    if not isinstance(raw_value, list):
+        return []
+
+    names = []
+    seen = set()
+    for entry in raw_value:
+        name = " ".join(str(entry or "").split())
+        if not name:
+            continue
+        lower_name = name.lower()
+        if lower_name in seen:
+            raise ValueError("partner names must be unique")
+        seen.add(lower_name)
+        names.append(name)
+    return names
+
+
+def validate_company_setup(business_type, partner_names):
+    if business_type not in VALID_BUSINESS_TYPES:
+        return "invalid business type"
+    if business_type == "partnership" and len(partner_names) < 2:
+        return "partnerships require at least two partner names"
+    return None
+
+
+def replace_company_partners(company, partner_names):
+    existing = CompanyPartner.query.filter_by(company_id=company.id).all()
+    for partner in existing:
+        db.session.delete(partner)
+
+    for index, partner_name in enumerate(partner_names, start=1):
+        db.session.add(
+            CompanyPartner(
+                company_id=company.id,
+                name=partner_name,
+                display_order=index,
+            )
+        )
+
+
+def set_company_onboarding_state(company_id, is_configured):
+    state = CompanyOnboardingState.query.filter_by(company_id=company_id).first()
+    if not state:
+        state = CompanyOnboardingState(company_id=company_id)
+        db.session.add(state)
+    state.is_configured = bool(is_configured)
+    state.configured_at = datetime.datetime.now(datetime.UTC) if is_configured else None
+    return state
+
+
+def is_company_onboarding_complete(company_id):
+    state = CompanyOnboardingState.query.filter_by(company_id=company_id).first()
+    return bool(state and state.is_configured)
+
+
+def get_company_partner_names(company_id):
+    partners = (
+        CompanyPartner.query.filter_by(company_id=company_id)
+        .order_by(CompanyPartner.display_order.asc(), CompanyPartner.id.asc())
+        .all()
+    )
+    return [partner.name for partner in partners]
+
+
+def serialize_company(company):
+    partner_names = get_company_partner_names(company.id)
+    return {
+        "id": company.id,
+        "name": company.name,
+        "business_type": company.business_type,
+        "partner_names": partner_names,
+        "partner_count": len(partner_names),
+        "onboarding_complete": is_company_onboarding_complete(company.id),
+    }
 
 
 def parse_company_id(raw_value):
@@ -2872,14 +2972,363 @@ def default_subtype_for(ledger_type):
     return "equity"
 
 
+LEDGER_COLUMN_ALIASES = {
+    "account": {"account", "name", "account name", "description"},
+    "type": {"type"},
+    "subtype": {"subtype", "class", "category"},
+    "amount": {"amount", "value"},
+    "debit": {"debit", "dr"},
+    "credit": {"credit", "cr"},
+    "depreciation": {"depreciation", "depreciation_amount"},
+}
+
+
+def normalize_column_label(value):
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def detect_column_role(column):
+    key = normalize_column_label(column)
+    for role, aliases in LEDGER_COLUMN_ALIASES.items():
+        if key in aliases:
+            return role
+    return None
+
+
+def uploaded_file_seek(uploaded_file):
+    seek = getattr(uploaded_file, "seek", None)
+    if callable(seek):
+        seek(0)
+        return
+
+    stream = getattr(uploaded_file, "stream", None)
+    if stream is not None and hasattr(stream, "seek"):
+        stream.seek(0)
+
+
+def read_tabular_dataframe(uploaded_file, reader, **kwargs):
+    frame = reader(uploaded_file, **kwargs)
+    roles = {detect_column_role(column) for column in frame.columns}
+    roles.discard(None)
+
+    # Trial balances are often uploaded as raw rows with no header row at all.
+    if not roles and frame.shape[1] <= 2:
+        uploaded_file_seek(uploaded_file)
+        return reader(uploaded_file, header=None, **kwargs)
+
+    return frame
+
+
+def is_blank_cell(value):
+    if value is None:
+        return True
+    if isinstance(value, float) and pd.isna(value):
+        return True
+    return str(value).strip() == ""
+
+
+def parse_numeric_cell(value):
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if pd.isna(value):
+            return None
+        return float(value)
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    negative = False
+    if text.startswith("(") and text.endswith(")"):
+        negative = True
+        text = text[1:-1].strip()
+
+    if text.endswith("-"):
+        negative = True
+        text = text[:-1].strip()
+
+    text = re.sub(r"(?i)\b(dr|cr)\b", "", text)
+    text = text.replace(",", "").replace("$", "").replace("€", "").replace("£", "").strip()
+    if not text:
+        return None
+
+    try:
+        number = float(text)
+    except ValueError:
+        return None
+    return -number if negative else number
+
+
+def normalize_account_key(account_name):
+    return re.sub(r"[^a-z0-9]+", " ", str(account_name or "").strip().lower()).strip()
+
+
+def should_skip_derived_label(account_name):
+    key = normalize_account_key(account_name)
+    if not key:
+        return True
+
+    derived_labels = {
+        "cost of raw materials consumed",
+        "prime cost",
+        "total factory overheads",
+        "cost of goods manufactured",
+        "cost of goods manufactured 445",
+    }
+    return key in derived_labels
+
+
+def infer_trial_balance_account(account_name):
+    raw_name = str(account_name or "").strip()
+    key = normalize_account_key(raw_name)
+    title = raw_name.title() or "Unclassified Entry"
+
+    if not key:
+        return {"account": "Unclassified Entry", "type": "expense", "subtype": "operating"}
+
+    if "closing raw material" in key:
+        return {"account": "Closing Raw Materials", "type": "asset", "subtype": "current"}
+    if "opening raw material" in key or "raw materials opening" in key:
+        return {"account": "Raw Materials Opening Stock", "type": "asset", "subtype": "current"}
+    if "opening work in progress" in key or "opening wip" in key:
+        return {"account": "Opening Work in Progress", "type": "asset", "subtype": "current"}
+    if "closing work in progress" in key or "closing wip" in key:
+        return {"account": "Closing Work in Progress", "type": "asset", "subtype": "current"}
+    if "closing stock" in key:
+        return {"account": "Closing Stock", "type": "asset", "subtype": "current"}
+    if key.startswith("stock ") or key == "stock" or "opening stock" in key:
+        return {"account": "Opening Stock", "type": "asset", "subtype": "current"}
+
+    if "returns inward" in key or "return inward" in key:
+        return {"account": "Sales Returns", "type": "expense", "subtype": "operating"}
+    if "returns outward" in key or "return outward" in key:
+        return {"account": "Returns Outwards", "type": "expense", "subtype": "operating"}
+    if "carriage inward" in key:
+        return {"account": "Carriage Inwards", "type": "expense", "subtype": "operating"}
+    if "carriage outward" in key:
+        return {"account": "Carriage Outwards", "type": "expense", "subtype": "operating"}
+    if "direct manufacturing labor" in key or "direct manufacturing labour" in key:
+        return {"account": "Direct Manufacturing Labor", "type": "expense", "subtype": "operating"}
+    if "factory indirect labor" in key or "factory indirect labour" in key:
+        return {"account": "Factory Indirect Labor", "type": "expense", "subtype": "operating"}
+    if "factory utilit" in key:
+        return {"account": "Factory Utilities", "type": "expense", "subtype": "operating"}
+    if "depreciation of factory equipment" in key:
+        return {"account": "Depreciation of Factory Equipment", "type": "expense", "subtype": "operating"}
+    if "purchase" in key:
+        return {"account": "Purchases", "type": "expense", "subtype": "operating"}
+    if "sales" in key or "turnover" in key:
+        return {"account": "Sales Revenue", "type": "revenue", "subtype": "operating"}
+    if "salary" in key or "wages" in key or "payroll" in key:
+        return {"account": "Payroll Expenses", "type": "expense", "subtype": "operating"}
+    if key == "rent" or "rent expense" in key:
+        return {"account": "Rent Expense", "type": "expense", "subtype": "operating"}
+    if "insurance" in key:
+        return {"account": "Insurance Premiums", "type": "expense", "subtype": "operating"}
+    if "motor expense" in key:
+        return {"account": "Motor Expenses", "type": "expense", "subtype": "operating"}
+    if "lighting" in key or "heating" in key or "utilities" in key:
+        return {"account": "Utilities Expense", "type": "expense", "subtype": "operating"}
+    if "general expense" in key:
+        return {"account": "General Expenses", "type": "expense", "subtype": "operating"}
+    if "office expense" in key:
+        return {"account": "Office Expenses", "type": "expense", "subtype": "operating"}
+    if "bad debt" in key:
+        return {"account": "Bad Debts", "type": "expense", "subtype": "other"}
+    if "discount" in key:
+        return {"account": "Discounts", "type": "expense", "subtype": "operating"}
+    if "depreciation" in key:
+        return {"account": "Depreciation Expense", "type": "expense", "subtype": "other"}
+    if "interest received" in key:
+        return {"account": "Interest Received", "type": "revenue", "subtype": "other"}
+    if "interest paid" in key or "interest on loan" in key or "interest on borrowing" in key:
+        return {"account": "Interest Paid on Loans", "type": "expense", "subtype": "other"}
+
+    if "premises" in key or "land" in key or "building" in key:
+        return {"account": "Land and Buildings", "type": "asset", "subtype": "non-current"}
+    if "motor vehicle" in key or "vehicle" in key:
+        return {"account": "Vehicles", "type": "asset", "subtype": "non-current"}
+    if "fixture" in key or "fitting" in key or "equipment" in key:
+        return {"account": "Equipment", "type": "asset", "subtype": "non-current"}
+    if "inventory" in key:
+        return {"account": "Inventory", "type": "asset", "subtype": "current"}
+    if "debtor" in key or "receivable" in key:
+        return {"account": "Accounts Receivable", "type": "asset", "subtype": "current"}
+    if "cash" in key or "bank" in key:
+        return {"account": "Cash and Cash Equivalents", "type": "asset", "subtype": "current"}
+
+    if "creditor" in key or "payable" in key:
+        return {"account": "Accounts Payable", "type": "liability", "subtype": "current"}
+    if "loan" in key or "borrowing" in key:
+        return {"account": "Bank Loan", "type": "liability", "subtype": "non-current"}
+    if "capital" in key or "equity" in key:
+        return {"account": "Owner Capital", "type": "capital", "subtype": "equity"}
+    if "drawing" in key:
+        return {"account": "Drawings", "type": "drawings", "subtype": "equity"}
+
+    if any(keyword in key for keyword in {"income", "revenue"}):
+        return {"account": title, "type": "revenue", "subtype": "other"}
+    if any(keyword in key for keyword in {"expense", "cost"}):
+        return {"account": title, "type": "expense", "subtype": "operating"}
+
+    return {"account": title, "type": "expense", "subtype": "operating"}
+
+
+def aggregate_ledger_dataframe(df):
+    return (
+        df.groupby(["account", "type", "subtype"], as_index=False, dropna=False)[["amount", "depreciation"]]
+        .sum()
+        .sort_values(["type", "account"], kind="stable")
+        .reset_index(drop=True)
+    )
+
+
+def normalize_structured_ledger_dataframe(df):
+    rename_map = {}
+    debit_column = None
+    credit_column = None
+
+    for column in df.columns:
+        role = detect_column_role(column)
+        if role in {"account", "type", "subtype", "amount", "depreciation"} and role not in rename_map.values():
+            rename_map[column] = role
+        elif role == "debit" and debit_column is None:
+            debit_column = column
+        elif role == "credit" and credit_column is None:
+            credit_column = column
+
+    normalized = df.rename(columns=rename_map).copy()
+    normalized = normalized.dropna(how="all")
+    if normalized.empty:
+        raise ValueError("file has no readable ledger rows")
+
+    if "amount" not in normalized.columns:
+        if debit_column is None and credit_column is None:
+            raise ValueError("missing required columns: amount")
+
+        debit_values = (
+            pd.to_numeric(normalized[debit_column], errors="coerce").fillna(0).abs()
+            if debit_column is not None
+            else 0
+        )
+        credit_values = (
+            pd.to_numeric(normalized[credit_column], errors="coerce").fillna(0).abs()
+            if credit_column is not None
+            else 0
+        )
+        normalized["amount"] = debit_values + credit_values
+
+    normalized["amount"] = normalized["amount"].apply(parse_numeric_cell)
+    if normalized["amount"].isna().any():
+        raise ValueError("amount column must contain numeric values")
+
+    if "account" not in normalized.columns:
+        if "type" not in normalized.columns:
+            raise ValueError("missing required columns: account or type")
+        normalized["account"] = normalized["type"].astype(str).str.title()
+    else:
+        normalized["account"] = normalized["account"].astype(str).str.strip().replace("", pd.NA)
+        if normalized["account"].isna().all() and "type" not in normalized.columns:
+            raise ValueError("account column must contain ledger names")
+
+    inferred = pd.DataFrame(normalized["account"].fillna("").map(infer_trial_balance_account).tolist())
+
+    if "type" not in normalized.columns:
+        normalized["type"] = inferred["type"]
+    else:
+        normalized["type"] = normalized["type"].astype(str).str.lower().str.strip()
+        blank_type = normalized["type"].eq("")
+        normalized.loc[blank_type, "type"] = inferred.loc[blank_type, "type"]
+
+    if "subtype" not in normalized.columns:
+        normalized["subtype"] = inferred["subtype"]
+    else:
+        normalized["subtype"] = normalized["subtype"].astype(str).str.lower().str.strip()
+        blank_subtype = normalized["subtype"].eq("")
+        normalized.loc[blank_subtype, "subtype"] = inferred.loc[blank_subtype, "subtype"]
+        still_blank = normalized["subtype"].eq("")
+        normalized.loc[still_blank, "subtype"] = normalized.loc[still_blank, "type"].map(default_subtype_for)
+
+    blank_account = normalized["account"].isna() | normalized["account"].astype(str).str.strip().eq("")
+    normalized.loc[blank_account, "account"] = inferred.loc[blank_account, "account"]
+
+    if "depreciation" not in normalized.columns:
+        normalized["depreciation"] = 0.0
+    else:
+        normalized["depreciation"] = normalized["depreciation"].apply(parse_numeric_cell)
+        if normalized["depreciation"].isna().any():
+            raise ValueError("depreciation column must contain numeric values")
+        if (normalized["depreciation"] < 0).any():
+            raise ValueError("depreciation cannot be negative")
+
+    return normalized[["account", "type", "subtype", "amount", "depreciation"]].reset_index(drop=True)
+
+
+def normalize_trial_balance_dataframe(df):
+    entries = []
+    pending_account = None
+
+    for row in df.itertuples(index=False, name=None):
+        cells = [value for value in row if not is_blank_cell(value)]
+        if not cells:
+            continue
+
+        numeric_values = [parse_numeric_cell(value) for value in cells]
+        numeric_values = [value for value in numeric_values if value is not None]
+        text_values = [str(value).strip() for value in cells if parse_numeric_cell(value) is None and str(value).strip()]
+
+        if text_values and numeric_values:
+            if should_skip_derived_label(text_values[0]):
+                pending_account = None
+                continue
+            details = infer_trial_balance_account(text_values[0])
+            entries.append(
+                {
+                    **details,
+                    "amount": abs(float(numeric_values[-1])),
+                    "depreciation": 0.0,
+                }
+            )
+            pending_account = None
+            continue
+
+        if text_values:
+            normalized_label = normalize_account_key(text_values[0])
+            if should_skip_derived_label(text_values[0]) or normalized_label == "factory overheads":
+                pending_account = None
+                continue
+            pending_account = text_values[0]
+            continue
+
+        if numeric_values and pending_account:
+            details = infer_trial_balance_account(pending_account)
+            entries.append(
+                {
+                    **details,
+                    "amount": abs(float(numeric_values[0])),
+                    "depreciation": 0.0,
+                }
+            )
+            pending_account = None
+
+    if not entries:
+        raise ValueError("could not detect ledger rows in the uploaded trial balance")
+
+    return aggregate_ledger_dataframe(pd.DataFrame(entries))
+
+
 def read_external_dataframe(uploaded_file):
     filename = (uploaded_file.filename or "").lower()
     suffix = Path(filename).suffix
 
     if suffix in {".csv", ".txt"}:
-        return pd.read_csv(uploaded_file)
+        return read_tabular_dataframe(uploaded_file, pd.read_csv)
     if suffix in {".xls", ".xlsx"}:
-        return pd.read_excel(uploaded_file)
+        try:
+            return read_tabular_dataframe(uploaded_file, pd.read_excel)
+        except ImportError as exc:
+            raise ValueError("xlsx support requires openpyxl to be installed") from exc
     if suffix == ".json":
         return pd.read_json(uploaded_file)
     if suffix == ".pdf":
@@ -2928,56 +3377,12 @@ def read_external_dataframe(uploaded_file):
 
 
 def normalize_ledger_dataframe(df):
-    rename_map = {}
-    for column in df.columns:
-        key = str(column).strip().lower()
-        if key in {"account", "name"}:
-            rename_map[column] = "account"
-        elif key in {"account name", "description"}:
-            rename_map[column] = "account"
-        elif key == "type":
-            rename_map[column] = "type"
-        elif key in {"subtype", "class", "category"}:
-            rename_map[column] = "subtype"
-        elif key in {"amount", "value", "debit", "dr", "credit", "cr"}:
-            rename_map[column] = "amount"
-        elif key in {"depreciation", "depreciation_amount"}:
-            rename_map[column] = "depreciation"
+    column_roles = {detect_column_role(column) for column in df.columns}
+    column_roles.discard(None)
 
-    normalized = df.rename(columns=rename_map).copy()
-    required = {"type", "amount"}
-    missing = required.difference(normalized.columns)
-    if missing:
-        raise ValueError(f"missing required columns: {', '.join(sorted(missing))}")
-
-    normalized["type"] = normalized["type"].astype(str).str.lower().str.strip()
-    normalized["amount"] = pd.to_numeric(normalized["amount"], errors="coerce")
-    if normalized["amount"].isna().any():
-        raise ValueError("amount column must contain numeric values")
-
-    if "account" not in normalized.columns:
-        normalized["account"] = normalized["type"].str.title()
-    else:
-        normalized["account"] = normalized["account"].astype(str).str.strip().replace("", pd.NA)
-        normalized["account"] = normalized["account"].fillna(normalized["type"].str.title())
-
-    if "subtype" not in normalized.columns:
-        normalized["subtype"] = normalized["type"].map(default_subtype_for)
-    else:
-        normalized["subtype"] = normalized["subtype"].astype(str).str.lower().str.strip()
-        blank_subtype = normalized["subtype"].eq("")
-        normalized.loc[blank_subtype, "subtype"] = normalized.loc[blank_subtype, "type"].map(default_subtype_for)
-
-    if "depreciation" not in normalized.columns:
-        normalized["depreciation"] = 0.0
-    else:
-        normalized["depreciation"] = pd.to_numeric(normalized["depreciation"], errors="coerce")
-        if normalized["depreciation"].isna().any():
-            raise ValueError("depreciation column must contain numeric values")
-        if (normalized["depreciation"] < 0).any():
-            raise ValueError("depreciation cannot be negative")
-
-    return normalized[["account", "type", "subtype", "amount", "depreciation"]]
+    if column_roles:
+        return normalize_structured_ledger_dataframe(df)
+    return normalize_trial_balance_dataframe(df)
 
 
 def calc(df):
@@ -3029,6 +3434,42 @@ def calc(df):
     revenue = float(df.loc[df["type"] == "revenue", "amount"].sum())
     expenses = float(df.loc[df["type"] == "expense", "amount"].sum())
 
+    if "account" in df.columns:
+        account_totals = (
+            df.assign(account_key=df["account"].astype(str).str.strip().str.lower())
+            .groupby("account_key")["amount"]
+            .sum()
+            .to_dict()
+        )
+    else:
+        account_totals = {}
+
+    def amount_by_account(*names):
+        return float(sum(account_totals.get(str(name).strip().lower(), 0) for name in names))
+
+    raw_materials_opening = amount_by_account("Raw Materials Opening Stock", "Opening Raw Materials")
+    raw_materials_purchases = amount_by_account("Purchases", "Purchases of Raw Materials")
+    raw_materials_carriage = amount_by_account("Carriage Inwards")
+    raw_materials_returns = amount_by_account("Returns Outwards")
+    raw_materials_closing = amount_by_account("Closing Raw Materials")
+    raw_materials_consumed = raw_materials_opening + raw_materials_purchases + raw_materials_carriage - raw_materials_returns - raw_materials_closing
+    direct_manufacturing_labor = amount_by_account("Direct Labour", "Direct Manufacturing Labor")
+    factory_indirect_labor = amount_by_account("Factory Indirect Labor")
+    factory_utilities = amount_by_account("Factory Utilities")
+    depreciation_factory_equipment = amount_by_account("Depreciation of Factory Equipment")
+    other_factory_overheads = amount_by_account("Factory Expenses", "Factory Overheads")
+    total_factory_overheads = (
+        factory_indirect_labor
+        + factory_utilities
+        + depreciation_factory_equipment
+        + other_factory_overheads
+    )
+    prime_cost = raw_materials_consumed + direct_manufacturing_labor
+    total_factory_cost = prime_cost + total_factory_overheads
+    opening_wip = amount_by_account("Opening Work in Progress")
+    closing_wip = amount_by_account("Closing Work in Progress")
+    cost_of_goods_manufactured = total_factory_cost + opening_wip - closing_wip
+
     # Return both snake_case and camelCase keys for easy frontend compatibility.
     return {
         "revenue": revenue,
@@ -3050,6 +3491,40 @@ def calc(df):
         "liabilitiesNonCurrent": non_current_liabilities,
         "totalLiabilities": total_liabilities,
         "expense": expenses,
+        "raw_materials_opening": raw_materials_opening,
+        "raw_materials_purchases": raw_materials_purchases,
+        "raw_materials_carriage": raw_materials_carriage,
+        "raw_materials_returns": raw_materials_returns,
+        "raw_materials_closing": raw_materials_closing,
+        "raw_materials_consumed": raw_materials_consumed,
+        "direct_manufacturing_labor": direct_manufacturing_labor,
+        "factory_indirect_labor": factory_indirect_labor,
+        "factory_utilities": factory_utilities,
+        "depreciation_factory_equipment": depreciation_factory_equipment,
+        "other_factory_overheads": other_factory_overheads,
+        "total_factory_overheads": total_factory_overheads,
+        "prime_cost": prime_cost,
+        "total_factory_cost": total_factory_cost,
+        "opening_wip": opening_wip,
+        "closing_wip": closing_wip,
+        "cost_of_goods_manufactured": cost_of_goods_manufactured,
+        "rawMaterialsOpening": raw_materials_opening,
+        "rawMaterialsPurchases": raw_materials_purchases,
+        "rawMaterialsCarriage": raw_materials_carriage,
+        "rawMaterialsReturns": raw_materials_returns,
+        "rawMaterialsClosing": raw_materials_closing,
+        "rawMaterialsConsumed": raw_materials_consumed,
+        "directManufacturingLabor": direct_manufacturing_labor,
+        "factoryIndirectLabor": factory_indirect_labor,
+        "factoryUtilities": factory_utilities,
+        "depreciationFactoryEquipment": depreciation_factory_equipment,
+        "otherFactoryOverheads": other_factory_overheads,
+        "totalFactoryOverheads": total_factory_overheads,
+        "primeCost": prime_cost,
+        "totalFactoryCost": total_factory_cost,
+        "openingWip": opening_wip,
+        "closingWip": closing_wip,
+        "costOfGoodsManufactured": cost_of_goods_manufactured,
     }
 
 
@@ -3062,11 +3537,21 @@ def register():
     org_name = (data.get("org") or "").strip()
     email = (data.get("email") or "").strip().lower()
     password = data.get("password") or ""
+    raw_business_type = data.get("business_type")
+    business_type = normalize_business_type(raw_business_type)
+
+    try:
+        partner_names = normalize_partner_names(data.get("partner_names"))
+    except ValueError as exc:
+        return error_response(str(exc))
 
     if not org_name or not email or not password:
         return error_response("org, email, and password are required")
     if len(password) < 8:
         return error_response("password must be at least 8 characters")
+    validation_error = validate_company_setup(business_type, partner_names)
+    if validation_error:
+        return error_response(validation_error)
 
     if User.query.filter_by(email=email).first():
         return error_response("email already exists", 409)
@@ -3076,7 +3561,12 @@ def register():
         org = Organization(name=org_name)
         db.session.add(org)
         db.session.flush()
-        db.session.add(Company(org_id=org.id, name=org_name, business_type="sole_proprietor"))
+        company = Company(org_id=org.id, name=org_name, business_type=business_type)
+        db.session.add(company)
+        db.session.flush()
+        replace_company_partners(company, partner_names)
+        if raw_business_type not in {None, ""}:
+            set_company_onboarding_state(company.id, True)
         user = User(email=email, password=hashed_password, role="owner", org_id=org.id)
         db.session.add(user)
         if not safe_commit():
@@ -3088,7 +3578,7 @@ def register():
         db.session.rollback()
         return error_response("database error during registration", 503)
 
-    return {"msg": "registered"}
+    return {"msg": "registered", "company": serialize_company(company)}
 
 
 @app.route("/login", methods=["POST"])
@@ -3261,14 +3751,7 @@ def list_companies():
         companies = [get_or_create_default_company(user.org_id)]
 
     return jsonify(
-        [
-            {
-                "id": company.id,
-                "name": company.name,
-                "business_type": company.business_type,
-            }
-            for company in companies
-        ]
+        [serialize_company(company) for company in companies]
     )
 
 
@@ -3282,27 +3765,67 @@ def create_company():
 
     data = request.get_json(silent=True) or {}
     name = (data.get("name") or "").strip()
-    business_type = (data.get("business_type") or "sole_proprietor").strip().lower()
+    business_type = normalize_business_type(data.get("business_type"))
+
+    try:
+        partner_names = normalize_partner_names(data.get("partner_names"))
+    except ValueError as exc:
+        return error_response(str(exc))
 
     if not name:
         return error_response("company name is required")
-    if business_type not in {"sole_proprietor", "partnership", "manufacturing"}:
-        return error_response("invalid business type")
+    validation_error = validate_company_setup(business_type, partner_names)
+    if validation_error:
+        return error_response(validation_error)
 
     company = Company(org_id=user.org_id, name=name, business_type=business_type)
     db.session.add(company)
     db.session.flush()
+    replace_company_partners(company, partner_names)
+    set_company_onboarding_state(company.id, True)
     seed_chart_of_accounts(company)
     seed_integration_connections(company)
     if not safe_commit():
         return error_response("database error while creating company", 503)
 
     log(user.id, f"created company {name}")
-    return {
-        "id": company.id,
-        "name": company.name,
-        "business_type": company.business_type,
-    }, 201
+    return serialize_company(company), 201
+
+
+@app.route("/companies/<int:company_id>/setup", methods=["PUT"])
+@jwt_required()
+@roles_required("owner", "admin")
+def update_company_setup(company_id):
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    company = Company.query.filter_by(id=company_id, org_id=user.org_id).first()
+    if not company:
+        return error_response("company not found", 404)
+
+    data = request.get_json(silent=True) or {}
+    business_type = normalize_business_type(data.get("business_type"))
+
+    try:
+        partner_names = normalize_partner_names(data.get("partner_names"))
+    except ValueError as exc:
+        return error_response(str(exc))
+
+    validation_error = validate_company_setup(business_type, partner_names)
+    if validation_error:
+        return error_response(validation_error)
+
+    company.business_type = business_type
+    replace_company_partners(company, partner_names)
+    set_company_onboarding_state(company.id, True)
+    seed_chart_of_accounts(company)
+    seed_integration_connections(company)
+    if not safe_commit():
+        return error_response("database error while saving company setup", 503)
+
+    log(user.id, f"configured company {company.name} as {business_type}")
+    return serialize_company(company)
 
 
 # ---------------- FINANCE OPS ----------------
