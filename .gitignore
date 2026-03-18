@@ -36,9 +36,11 @@ saas.db
 
 # Node
 node_modules/
-package-lock.json
 dist/
 build/
+
+# Track the frontend lockfile so deployments stay reproducible.
+!frontend/package-lock.json
 
 # IDE
 .vscode/

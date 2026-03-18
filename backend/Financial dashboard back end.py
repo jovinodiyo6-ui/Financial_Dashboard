@@ -12,6 +12,8 @@ import datetime
 import json
 import os
 import pandas as pd
+import urllib.request
+import urllib.error
 from dotenv import load_dotenv
 from io import StringIO
 
@@ -157,6 +159,604 @@ class ActiveSession(db.Model):
     )
 
 
+class Invoice(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    invoice_number = db.Column(db.String(40), nullable=False, unique=True)
+    customer_name = db.Column(db.String(120), nullable=False)
+    customer_email = db.Column(db.String(120), nullable=True)
+    status = db.Column(db.String(20), nullable=False, default="draft")
+    issue_date = db.Column(db.Date, nullable=False)
+    due_date = db.Column(db.Date, nullable=False)
+    subtotal = db.Column(db.Float, nullable=False, default=0.0)
+    tax_rate = db.Column(db.Float, nullable=False, default=0.0)
+    tax_amount = db.Column(db.Float, nullable=False, default=0.0)
+    total_amount = db.Column(db.Float, nullable=False, default=0.0)
+    balance_due = db.Column(db.Float, nullable=False, default=0.0)
+    notes = db.Column(db.Text, nullable=True)
+    created_by = db.Column(db.Integer, nullable=False)
+    last_sent_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    paid_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class InvoiceItem(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    invoice_id = db.Column(db.Integer, nullable=False)
+    description = db.Column(db.String(200), nullable=False)
+    quantity = db.Column(db.Float, nullable=False, default=1.0)
+    unit_price = db.Column(db.Float, nullable=False, default=0.0)
+    amount = db.Column(db.Float, nullable=False, default=0.0)
+
+
+class CustomerPayment(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    invoice_id = db.Column(db.Integer, nullable=False)
+    amount = db.Column(db.Float, nullable=False, default=0.0)
+    reference = db.Column(db.String(120), nullable=True)
+    source = db.Column(db.String(30), nullable=False, default="manual")
+    notes = db.Column(db.Text, nullable=True)
+    payment_date = db.Column(db.Date, nullable=False)
+    bank_transaction_id = db.Column(db.Integer, nullable=True)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class VendorBill(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    bill_number = db.Column(db.String(40), nullable=False, unique=True)
+    vendor_name = db.Column(db.String(120), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default="draft")
+    issue_date = db.Column(db.Date, nullable=False)
+    due_date = db.Column(db.Date, nullable=False)
+    subtotal = db.Column(db.Float, nullable=False, default=0.0)
+    tax_rate = db.Column(db.Float, nullable=False, default=0.0)
+    tax_amount = db.Column(db.Float, nullable=False, default=0.0)
+    total_amount = db.Column(db.Float, nullable=False, default=0.0)
+    balance_due = db.Column(db.Float, nullable=False, default=0.0)
+    notes = db.Column(db.Text, nullable=True)
+    created_by = db.Column(db.Integer, nullable=False)
+    approved_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    paid_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class VendorBillItem(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    bill_id = db.Column(db.Integer, nullable=False)
+    description = db.Column(db.String(200), nullable=False)
+    quantity = db.Column(db.Float, nullable=False, default=1.0)
+    unit_price = db.Column(db.Float, nullable=False, default=0.0)
+    amount = db.Column(db.Float, nullable=False, default=0.0)
+
+
+class VendorPayment(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    bill_id = db.Column(db.Integer, nullable=False)
+    amount = db.Column(db.Float, nullable=False, default=0.0)
+    reference = db.Column(db.String(120), nullable=True)
+    source = db.Column(db.String(30), nullable=False, default="manual")
+    notes = db.Column(db.Text, nullable=True)
+    payment_date = db.Column(db.Date, nullable=False)
+    bank_transaction_id = db.Column(db.Integer, nullable=True)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class BankFeedTransaction(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    posted_at = db.Column(db.Date, nullable=False)
+    description = db.Column(db.String(255), nullable=False)
+    amount = db.Column(db.Float, nullable=False, default=0.0)
+    reference = db.Column(db.String(120), nullable=True)
+    status = db.Column(db.String(20), nullable=False, default="unmatched")
+    matched_invoice_id = db.Column(db.Integer, nullable=True)
+    matched_bill_id = db.Column(db.Integer, nullable=True)
+    raw_payload = db.Column(db.Text, nullable=True)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class BankConnection(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    provider = db.Column(db.String(30), nullable=False, default="plaid")
+    item_id = db.Column(db.String(120), nullable=False, unique=True)
+    access_token = db.Column(db.String(255), nullable=False)
+    institution_name = db.Column(db.String(120), nullable=True)
+    status = db.Column(db.String(20), nullable=False, default="connected")
+    sync_cursor = db.Column(db.String(255), nullable=True)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+    updated_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        onupdate=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class TaxProfile(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False, unique=True)
+    jurisdiction_code = db.Column(db.String(40), nullable=False, default="generic")
+    filing_frequency = db.Column(db.String(20), nullable=False, default="monthly")
+    registration_number = db.Column(db.String(80), nullable=True)
+    currency_code = db.Column(db.String(8), nullable=False, default="USD")
+    sales_tax_name = db.Column(db.String(40), nullable=False, default="Sales Tax")
+    purchase_tax_name = db.Column(db.String(40), nullable=False, default="Purchase Tax Credit")
+    indirect_tax_rate = db.Column(db.Float, nullable=False, default=16.0)
+    income_tax_rate = db.Column(db.Float, nullable=False, default=30.0)
+    period_start_month = db.Column(db.Integer, nullable=False, default=1)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+    updated_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        onupdate=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class LedgerAccount(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    code = db.Column(db.String(20), nullable=False)
+    name = db.Column(db.String(120), nullable=False)
+    category = db.Column(db.String(20), nullable=False)
+    subtype = db.Column(db.String(40), nullable=True)
+    normal_balance = db.Column(db.String(10), nullable=False, default="debit")
+    description = db.Column(db.Text, nullable=True)
+    is_system = db.Column(db.Boolean, nullable=False, default=False)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+    updated_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        onupdate=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class JournalEntry(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    entry_number = db.Column(db.String(40), nullable=False, unique=True)
+    entry_date = db.Column(db.Date, nullable=False)
+    memo = db.Column(db.String(255), nullable=False)
+    reference = db.Column(db.String(120), nullable=True)
+    source_type = db.Column(db.String(40), nullable=False, default="manual")
+    source_id = db.Column(db.Integer, nullable=True)
+    status = db.Column(db.String(20), nullable=False, default="posted")
+    reverses_entry_id = db.Column(db.Integer, nullable=True)
+    created_by = db.Column(db.Integer, nullable=False)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class JournalLine(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    journal_entry_id = db.Column(db.Integer, nullable=False)
+    account_id = db.Column(db.Integer, nullable=False)
+    project_id = db.Column(db.Integer, nullable=True)
+    line_number = db.Column(db.Integer, nullable=False, default=1)
+    description = db.Column(db.String(255), nullable=True)
+    debit = db.Column(db.Float, nullable=False, default=0.0)
+    credit = db.Column(db.Float, nullable=False, default=0.0)
+
+
+class VendorProfile(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    vendor_name = db.Column(db.String(120), nullable=False)
+    email = db.Column(db.String(120), nullable=True)
+    tax_id = db.Column(db.String(80), nullable=True)
+    default_payment_rail = db.Column(db.String(30), nullable=False, default="ach")
+    remittance_reference = db.Column(db.String(120), nullable=True)
+    bank_last4 = db.Column(db.String(4), nullable=True)
+    is_1099_eligible = db.Column(db.Boolean, nullable=False, default=False)
+    tax_form_type = db.Column(db.String(20), nullable=False, default="1099-NEC")
+    tin_status = db.Column(db.String(20), nullable=False, default="pending")
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+    updated_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        onupdate=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class BillDisbursement(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    bill_id = db.Column(db.Integer, nullable=False)
+    vendor_profile_id = db.Column(db.Integer, nullable=True)
+    payment_rail = db.Column(db.String(30), nullable=False, default="ach")
+    status = db.Column(db.String(20), nullable=False, default="scheduled")
+    scheduled_date = db.Column(db.Date, nullable=False)
+    processed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    amount = db.Column(db.Float, nullable=False, default=0.0)
+    reference = db.Column(db.String(120), nullable=True)
+    confirmation_code = db.Column(db.String(40), nullable=True)
+    compliance_status = db.Column(db.String(20), nullable=False, default="ready")
+    created_by = db.Column(db.Integer, nullable=False)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class ReconciliationRule(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    name = db.Column(db.String(120), nullable=False)
+    keyword = db.Column(db.String(120), nullable=True)
+    direction = db.Column(db.String(20), nullable=False, default="any")
+    min_amount = db.Column(db.Float, nullable=True)
+    max_amount = db.Column(db.Float, nullable=True)
+    auto_action = db.Column(db.String(30), nullable=False, default="suggest_account")
+    target_reference = db.Column(db.String(80), nullable=True)
+    exception_type = db.Column(db.String(40), nullable=True)
+    priority = db.Column(db.Integer, nullable=False, default=100)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class ReconciliationException(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    bank_transaction_id = db.Column(db.Integer, nullable=False)
+    exception_type = db.Column(db.String(40), nullable=False)
+    notes = db.Column(db.Text, nullable=True)
+    status = db.Column(db.String(20), nullable=False, default="open")
+    created_by = db.Column(db.Integer, nullable=False)
+    resolved_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class TaxFiling(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    jurisdiction_code = db.Column(db.String(40), nullable=False)
+    filing_frequency = db.Column(db.String(20), nullable=False)
+    filing_type = db.Column(db.String(30), nullable=False, default="indirect_tax")
+    period_start = db.Column(db.Date, nullable=False)
+    period_end = db.Column(db.Date, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default="prepared")
+    reference = db.Column(db.String(80), nullable=True)
+    payload_json = db.Column(db.Text, nullable=True)
+    prepared_by = db.Column(db.Integer, nullable=False)
+    prepared_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+    submitted_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class EmployeeProfile(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    full_name = db.Column(db.String(120), nullable=False)
+    email = db.Column(db.String(120), nullable=True)
+    pay_type = db.Column(db.String(20), nullable=False, default="hourly")
+    hourly_rate = db.Column(db.Float, nullable=False, default=0.0)
+    salary_amount = db.Column(db.Float, nullable=False, default=0.0)
+    withholding_rate = db.Column(db.Float, nullable=False, default=0.0)
+    benefit_rate = db.Column(db.Float, nullable=False, default=0.0)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+    updated_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        onupdate=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class ContractorProfile(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    full_name = db.Column(db.String(120), nullable=False)
+    email = db.Column(db.String(120), nullable=True)
+    tax_id = db.Column(db.String(80), nullable=True)
+    default_rate = db.Column(db.Float, nullable=False, default=0.0)
+    is_1099_eligible = db.Column(db.Boolean, nullable=False, default=True)
+    tax_form_type = db.Column(db.String(20), nullable=False, default="1099-NEC")
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+    updated_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        onupdate=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class TimeEntry(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    employee_id = db.Column(db.Integer, nullable=True)
+    contractor_id = db.Column(db.Integer, nullable=True)
+    project_id = db.Column(db.Integer, nullable=True)
+    work_date = db.Column(db.Date, nullable=False)
+    hours = db.Column(db.Float, nullable=False, default=0.0)
+    hourly_cost = db.Column(db.Float, nullable=False, default=0.0)
+    billable_rate = db.Column(db.Float, nullable=False, default=0.0)
+    description = db.Column(db.String(255), nullable=True)
+    status = db.Column(db.String(20), nullable=False, default="submitted")
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class MileageEntry(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    employee_id = db.Column(db.Integer, nullable=True)
+    contractor_id = db.Column(db.Integer, nullable=True)
+    project_id = db.Column(db.Integer, nullable=True)
+    trip_date = db.Column(db.Date, nullable=False)
+    miles = db.Column(db.Float, nullable=False, default=0.0)
+    rate_per_mile = db.Column(db.Float, nullable=False, default=0.0)
+    purpose = db.Column(db.String(255), nullable=True)
+    status = db.Column(db.String(20), nullable=False, default="submitted")
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class PayrollRun(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    payroll_number = db.Column(db.String(40), nullable=False, unique=True)
+    period_start = db.Column(db.Date, nullable=False)
+    period_end = db.Column(db.Date, nullable=False)
+    pay_date = db.Column(db.Date, nullable=False)
+    status = db.Column(db.String(20), nullable=False, default="processed")
+    gross_pay = db.Column(db.Float, nullable=False, default=0.0)
+    withholding_total = db.Column(db.Float, nullable=False, default=0.0)
+    benefit_total = db.Column(db.Float, nullable=False, default=0.0)
+    mileage_reimbursement_total = db.Column(db.Float, nullable=False, default=0.0)
+    net_cash = db.Column(db.Float, nullable=False, default=0.0)
+    created_by = db.Column(db.Integer, nullable=False)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class PayrollLine(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    payroll_run_id = db.Column(db.Integer, nullable=False)
+    employee_id = db.Column(db.Integer, nullable=False)
+    regular_hours = db.Column(db.Float, nullable=False, default=0.0)
+    gross_pay = db.Column(db.Float, nullable=False, default=0.0)
+    withholding_amount = db.Column(db.Float, nullable=False, default=0.0)
+    benefit_amount = db.Column(db.Float, nullable=False, default=0.0)
+    mileage_reimbursement = db.Column(db.Float, nullable=False, default=0.0)
+    net_pay = db.Column(db.Float, nullable=False, default=0.0)
+
+
+class InventoryItem(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    sku = db.Column(db.String(60), nullable=False)
+    name = db.Column(db.String(120), nullable=False)
+    category = db.Column(db.String(80), nullable=True)
+    quantity_on_hand = db.Column(db.Float, nullable=False, default=0.0)
+    reorder_point = db.Column(db.Float, nullable=False, default=0.0)
+    reorder_quantity = db.Column(db.Float, nullable=False, default=0.0)
+    unit_cost = db.Column(db.Float, nullable=False, default=0.0)
+    unit_price = db.Column(db.Float, nullable=False, default=0.0)
+    preferred_vendor_name = db.Column(db.String(120), nullable=True)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+    updated_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        onupdate=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class PurchaseOrder(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    po_number = db.Column(db.String(40), nullable=False, unique=True)
+    vendor_name = db.Column(db.String(120), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default="draft")
+    issue_date = db.Column(db.Date, nullable=False)
+    expected_date = db.Column(db.Date, nullable=True)
+    notes = db.Column(db.Text, nullable=True)
+    created_by = db.Column(db.Integer, nullable=False)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class PurchaseOrderLine(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    purchase_order_id = db.Column(db.Integer, nullable=False)
+    inventory_item_id = db.Column(db.Integer, nullable=True)
+    sku = db.Column(db.String(60), nullable=True)
+    description = db.Column(db.String(200), nullable=False)
+    quantity = db.Column(db.Float, nullable=False, default=0.0)
+    unit_cost = db.Column(db.Float, nullable=False, default=0.0)
+    received_quantity = db.Column(db.Float, nullable=False, default=0.0)
+
+
+class InventoryMovement(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    inventory_item_id = db.Column(db.Integer, nullable=False)
+    project_id = db.Column(db.Integer, nullable=True)
+    movement_type = db.Column(db.String(30), nullable=False)
+    quantity_delta = db.Column(db.Float, nullable=False, default=0.0)
+    unit_cost = db.Column(db.Float, nullable=False, default=0.0)
+    reference = db.Column(db.String(120), nullable=True)
+    occurred_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class Project(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    project_code = db.Column(db.String(40), nullable=False, unique=True)
+    name = db.Column(db.String(120), nullable=False)
+    customer_name = db.Column(db.String(120), nullable=True)
+    status = db.Column(db.String(20), nullable=False, default="active")
+    budget_revenue = db.Column(db.Float, nullable=False, default=0.0)
+    budget_cost = db.Column(db.Float, nullable=False, default=0.0)
+    notes = db.Column(db.Text, nullable=True)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+    updated_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        onupdate=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class ProjectCostEntry(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    project_id = db.Column(db.Integer, nullable=False)
+    entry_type = db.Column(db.String(20), nullable=False, default="cost")
+    description = db.Column(db.String(255), nullable=False)
+    amount = db.Column(db.Float, nullable=False, default=0.0)
+    reference = db.Column(db.String(120), nullable=True)
+    work_date = db.Column(db.Date, nullable=False)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
+class IntegrationConnection(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    org_id = db.Column(db.Integer, nullable=False)
+    company_id = db.Column(db.Integer, nullable=False)
+    provider = db.Column(db.String(40), nullable=False)
+    category = db.Column(db.String(40), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default="available")
+    config_json = db.Column(db.Text, nullable=True)
+    last_synced_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    created_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+    updated_at = db.Column(
+        db.DateTime(timezone=True),
+        default=lambda: datetime.datetime.now(datetime.UTC),
+        onupdate=lambda: datetime.datetime.now(datetime.UTC),
+        nullable=False,
+    )
+
+
 with app.app_context():
     # Avoid multi-worker startup races in production. In production, schema
     # should be managed explicitly (migrations/init job), not at app import time.
@@ -177,6 +777,86 @@ with app.app_context():
 FREE_USAGE_LIMIT = 5
 MAINTENANCE_DEFAULT_MESSAGE = "[System Under Maintainance]"
 VALID_ROLES = {"owner", "admin", "accountant", "manager", "cashier", "member"}
+INVOICE_OPEN_STATUSES = {"draft", "sent", "partial", "overdue"}
+BILL_OPEN_STATUSES = {"draft", "approved", "partial", "overdue"}
+INVOICE_SETTLED_STATUSES = {"paid", "cancelled"}
+BILL_SETTLED_STATUSES = {"paid", "cancelled"}
+VALID_TAX_FILING_FREQUENCIES = {"monthly", "quarterly", "annual"}
+VALID_ACCOUNT_CATEGORIES = {"asset", "liability", "equity", "revenue", "expense"}
+VALID_PAYMENT_RAILS = {"ach", "wire", "card", "check", "mobile_money"}
+VALID_RECONCILIATION_DIRECTIONS = {"any", "inflow", "outflow"}
+VALID_RECONCILIATION_ACTIONS = {"suggest_account", "flag_exception"}
+VALID_TAX_FILING_TYPES = {"indirect_tax", "income_tax", "payroll_tax"}
+VALID_PAY_TYPES = {"hourly", "salary"}
+VALID_INTEGRATION_STATUSES = {"available", "connected", "attention"}
+INTEGRATION_CATALOG = [
+    {"provider": "plaid", "category": "banking", "description": "Direct bank feeds and transaction sync."},
+    {"provider": "stripe", "category": "payments", "description": "Card payments and customer collections."},
+    {"provider": "google_drive", "category": "documents", "description": "Shared workpapers, invoices, and filing packs."},
+    {"provider": "slack", "category": "collaboration", "description": "Approval alerts, daily cash, and close notifications."},
+    {"provider": "power_bi", "category": "analytics", "description": "Publish accountant and board reporting datasets."},
+]
+DEFAULT_CHART_OF_ACCOUNTS = [
+    {"code": "1000", "name": "Cash", "category": "asset", "subtype": "current", "normal_balance": "debit"},
+    {"code": "1100", "name": "Accounts Receivable", "category": "asset", "subtype": "current", "normal_balance": "debit"},
+    {"code": "1200", "name": "Inventory Asset", "category": "asset", "subtype": "current", "normal_balance": "debit"},
+    {"code": "1250", "name": "Input Tax Receivable", "category": "asset", "subtype": "current", "normal_balance": "debit"},
+    {"code": "1300", "name": "Prepaid Expenses", "category": "asset", "subtype": "current", "normal_balance": "debit"},
+    {"code": "1500", "name": "Property and Equipment", "category": "asset", "subtype": "non-current", "normal_balance": "debit"},
+    {"code": "2000", "name": "Accounts Payable", "category": "liability", "subtype": "current", "normal_balance": "credit"},
+    {"code": "2100", "name": "Sales Tax Payable", "category": "liability", "subtype": "current", "normal_balance": "credit"},
+    {"code": "2200", "name": "Payroll Withholding Payable", "category": "liability", "subtype": "current", "normal_balance": "credit"},
+    {"code": "2300", "name": "Accrued Expenses", "category": "liability", "subtype": "current", "normal_balance": "credit"},
+    {"code": "2400", "name": "Contractor Payable", "category": "liability", "subtype": "current", "normal_balance": "credit"},
+    {"code": "3000", "name": "Owner Equity", "category": "equity", "subtype": "equity", "normal_balance": "credit"},
+    {"code": "3100", "name": "Retained Earnings", "category": "equity", "subtype": "equity", "normal_balance": "credit"},
+    {"code": "4000", "name": "Sales Revenue", "category": "revenue", "subtype": "operating", "normal_balance": "credit"},
+    {"code": "4100", "name": "Service Revenue", "category": "revenue", "subtype": "operating", "normal_balance": "credit"},
+    {"code": "5000", "name": "Cost of Goods Sold", "category": "expense", "subtype": "operating", "normal_balance": "debit"},
+    {"code": "5100", "name": "Payroll Expense", "category": "expense", "subtype": "operating", "normal_balance": "debit"},
+    {"code": "5200", "name": "Operating Expense", "category": "expense", "subtype": "operating", "normal_balance": "debit"},
+    {"code": "5300", "name": "Tax Expense", "category": "expense", "subtype": "other", "normal_balance": "debit"},
+    {"code": "5400", "name": "Mileage Reimbursement Expense", "category": "expense", "subtype": "operating", "normal_balance": "debit"},
+    {"code": "5500", "name": "Software and SaaS Expense", "category": "expense", "subtype": "operating", "normal_balance": "debit"},
+    {"code": "5600", "name": "Contractor Expense", "category": "expense", "subtype": "operating", "normal_balance": "debit"},
+]
+TAX_JURISDICTION_LIBRARY = {
+    "generic": {
+        "name": "Generic Indirect Tax",
+        "filing_type": "indirect_tax",
+        "return_labels": ["taxable_sales", "tax_collected", "tax_credit", "net_tax_due"],
+    },
+    "ke-vat": {
+        "name": "Kenya VAT",
+        "filing_type": "indirect_tax",
+        "return_labels": ["vatable_sales", "output_vat", "input_vat", "vat_payable"],
+    },
+    "us-sales-tax": {
+        "name": "United States Sales Tax",
+        "filing_type": "indirect_tax",
+        "return_labels": ["taxable_sales", "sales_tax_collected", "exempt_sales", "net_sales_tax_due"],
+    },
+    "uk-vat": {
+        "name": "United Kingdom VAT",
+        "filing_type": "indirect_tax",
+        "return_labels": ["vat_due_sales", "vat_reclaimed", "net_vat_due", "total_sales_ex_vat"],
+    },
+    "ca-gst": {
+        "name": "Canada GST/HST",
+        "filing_type": "indirect_tax",
+        "return_labels": ["gst_hst_collected", "input_tax_credits", "net_gst_hst_due", "taxable_supplies"],
+    },
+    "au-gst": {
+        "name": "Australia GST",
+        "filing_type": "indirect_tax",
+        "return_labels": ["gst_collected", "gst_credits", "net_gst_due", "taxable_sales"],
+    },
+}
+PLAID_ENVIRONMENTS = {
+    "sandbox": "https://sandbox.plaid.com",
+    "development": "https://development.plaid.com",
+    "production": "https://production.plaid.com",
+}
 
 # ---------------- HELPERS ----------------
 
@@ -314,10 +994,15 @@ def aggregate_org_reports(org_id, company_id=None):
 def get_or_create_default_company(org_id, name="Main Company"):
     company = Company.query.filter_by(org_id=org_id).order_by(Company.id.asc()).first()
     if company:
+        seed_chart_of_accounts(company)
+        seed_integration_connections(company)
         return company
 
     company = Company(org_id=org_id, name=name, business_type="sole_proprietor")
     db.session.add(company)
+    db.session.flush()
+    seed_chart_of_accounts(company)
+    seed_integration_connections(company)
     safe_commit()
     return company
 
@@ -336,6 +1021,1841 @@ def resolve_company_for_user(user, raw_company_id=None):
     if company_id is None:
         return get_or_create_default_company(user.org_id)
     return Company.query.filter_by(id=company_id, org_id=user.org_id).first()
+
+
+def today_utc_date():
+    return datetime.datetime.now(datetime.UTC).date()
+
+
+def iso_date(value):
+    return value.isoformat() if value else None
+
+
+def parse_iso_date(raw_value, field_name, default=None):
+    if raw_value in {None, ""}:
+        return default
+    if isinstance(raw_value, datetime.datetime):
+        return raw_value.date()
+    if isinstance(raw_value, datetime.date):
+        return raw_value
+    try:
+        return datetime.date.fromisoformat(str(raw_value))
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be in YYYY-MM-DD format") from exc
+
+
+def parse_money(value, field_name):
+    try:
+        amount = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be numeric") from exc
+    return round(amount, 2)
+
+
+def parse_bool(value, default=False):
+    if value in {None, ""}:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def normalize_document_items(items, document_name):
+    if not isinstance(items, list) or not items:
+        raise ValueError(f"{document_name} requires at least one line item")
+
+    normalized_items = []
+    subtotal = 0.0
+    for index, item in enumerate(items, start=1):
+        payload = item or {}
+        description = (payload.get("description") or f"Line {index}").strip()
+        quantity = parse_money(payload.get("quantity", 0), f"line {index} quantity")
+        unit_price = parse_money(payload.get("unit_price", 0), f"line {index} unit_price")
+        if quantity <= 0:
+            raise ValueError(f"line {index} quantity must be greater than 0")
+        if unit_price < 0:
+            raise ValueError(f"line {index} unit_price cannot be negative")
+
+        amount = round(quantity * unit_price, 2)
+        subtotal += amount
+        normalized_items.append(
+            {
+                "description": description,
+                "quantity": quantity,
+                "unit_price": unit_price,
+                "amount": amount,
+            }
+        )
+
+    return normalized_items, round(subtotal, 2)
+
+
+def generate_document_number(model_class, company_id, prefix):
+    next_number = model_class.query.filter_by(company_id=company_id).count() + 1
+    return f"{prefix}-{int(company_id):03d}-{next_number:05d}"
+
+
+def invoice_items_for(invoice_id):
+    return InvoiceItem.query.filter_by(invoice_id=invoice_id).order_by(InvoiceItem.id.asc()).all()
+
+
+def bill_items_for(bill_id):
+    return VendorBillItem.query.filter_by(bill_id=bill_id).order_by(VendorBillItem.id.asc()).all()
+
+
+def serialize_line_items(items):
+    return [
+        {
+            "id": item.id,
+            "description": item.description,
+            "quantity": round(float(item.quantity or 0), 2),
+            "unit_price": round(float(item.unit_price or 0), 2),
+            "amount": round(float(item.amount or 0), 2),
+        }
+        for item in items
+    ]
+
+
+def total_customer_payments(invoice_id):
+    rows = CustomerPayment.query.filter_by(invoice_id=invoice_id).all()
+    return round(sum(float(row.amount or 0) for row in rows), 2)
+
+
+def total_vendor_payments(bill_id):
+    rows = VendorPayment.query.filter_by(bill_id=bill_id).all()
+    return round(sum(float(row.amount or 0) for row in rows), 2)
+
+
+def refresh_invoice_status(invoice):
+    previous_status = invoice.status
+    previous_balance = round(float(invoice.balance_due or 0), 2)
+    payments_total = total_customer_payments(invoice.id)
+    invoice.balance_due = round(max(0.0, float(invoice.total_amount or 0) - payments_total), 2)
+    today = today_utc_date()
+
+    if previous_status == "cancelled":
+        return previous_status != invoice.status or previous_balance != invoice.balance_due
+
+    if invoice.balance_due <= 0.009:
+        invoice.balance_due = 0.0
+        invoice.status = "paid"
+        invoice.paid_at = invoice.paid_at or datetime.datetime.now(datetime.UTC)
+    elif payments_total > 0:
+        invoice.status = "partial"
+    elif invoice.status == "draft":
+        invoice.status = "draft"
+    elif invoice.due_date and invoice.due_date < today:
+        invoice.status = "overdue"
+    else:
+        invoice.status = "sent"
+
+    return previous_status != invoice.status or previous_balance != invoice.balance_due
+
+
+def refresh_bill_status(bill):
+    previous_status = bill.status
+    previous_balance = round(float(bill.balance_due or 0), 2)
+    payments_total = total_vendor_payments(bill.id)
+    bill.balance_due = round(max(0.0, float(bill.total_amount or 0) - payments_total), 2)
+    today = today_utc_date()
+
+    if previous_status == "cancelled":
+        return previous_status != bill.status or previous_balance != bill.balance_due
+
+    if bill.balance_due <= 0.009:
+        bill.balance_due = 0.0
+        bill.status = "paid"
+        bill.paid_at = bill.paid_at or datetime.datetime.now(datetime.UTC)
+    elif payments_total > 0:
+        bill.status = "partial"
+    elif bill.status == "draft":
+        bill.status = "draft"
+    elif bill.due_date and bill.due_date < today:
+        bill.status = "overdue"
+    else:
+        bill.status = "approved"
+
+    return previous_status != bill.status or previous_balance != bill.balance_due
+
+
+def refresh_finance_documents(company_id):
+    dirty = False
+    invoices = Invoice.query.filter_by(company_id=company_id).all()
+    bills = VendorBill.query.filter_by(company_id=company_id).all()
+
+    for invoice in invoices:
+        dirty = refresh_invoice_status(invoice) or dirty
+    for bill in bills:
+        dirty = refresh_bill_status(bill) or dirty
+
+    if dirty:
+        safe_commit()
+
+    return invoices, bills
+
+
+def serialize_invoice(invoice):
+    paid_amount = round(float(invoice.total_amount or 0) - float(invoice.balance_due or 0), 2)
+    return {
+        "id": invoice.id,
+        "invoice_number": invoice.invoice_number,
+        "customer_name": invoice.customer_name,
+        "customer_email": invoice.customer_email,
+        "status": invoice.status,
+        "issue_date": iso_date(invoice.issue_date),
+        "due_date": iso_date(invoice.due_date),
+        "subtotal": round(float(invoice.subtotal or 0), 2),
+        "tax_rate": round(float(invoice.tax_rate or 0), 2),
+        "tax_amount": round(float(invoice.tax_amount or 0), 2),
+        "total_amount": round(float(invoice.total_amount or 0), 2),
+        "balance_due": round(float(invoice.balance_due or 0), 2),
+        "paid_amount": paid_amount,
+        "notes": invoice.notes or "",
+        "overdue": invoice.status == "overdue",
+        "items": serialize_line_items(invoice_items_for(invoice.id)),
+    }
+
+
+def serialize_bill(bill):
+    paid_amount = round(float(bill.total_amount or 0) - float(bill.balance_due or 0), 2)
+    return {
+        "id": bill.id,
+        "bill_number": bill.bill_number,
+        "vendor_name": bill.vendor_name,
+        "status": bill.status,
+        "issue_date": iso_date(bill.issue_date),
+        "due_date": iso_date(bill.due_date),
+        "subtotal": round(float(bill.subtotal or 0), 2),
+        "tax_rate": round(float(bill.tax_rate or 0), 2),
+        "tax_amount": round(float(bill.tax_amount or 0), 2),
+        "total_amount": round(float(bill.total_amount or 0), 2),
+        "balance_due": round(float(bill.balance_due or 0), 2),
+        "paid_amount": paid_amount,
+        "notes": bill.notes or "",
+        "overdue": bill.status == "overdue",
+        "items": serialize_line_items(bill_items_for(bill.id)),
+    }
+
+
+def serialize_bank_transaction(transaction):
+    amount = round(float(transaction.amount or 0), 2)
+    return {
+        "id": transaction.id,
+        "posted_at": iso_date(transaction.posted_at),
+        "description": transaction.description,
+        "amount": amount,
+        "absolute_amount": round(abs(amount), 2),
+        "direction": "inflow" if amount >= 0 else "outflow",
+        "reference": transaction.reference or "",
+        "status": transaction.status,
+        "matched_invoice_id": transaction.matched_invoice_id,
+        "matched_bill_id": transaction.matched_bill_id,
+    }
+
+
+def normalize_bank_feed_dataframe(df):
+    rename_map = {}
+    for column in df.columns:
+        key = str(column).strip().lower()
+        if key in {"date", "posted_at", "posted date", "transaction_date", "value date"}:
+            rename_map[column] = "posted_at"
+        elif key in {"description", "details", "memo", "narration"}:
+            rename_map[column] = "description"
+        elif key in {"amount", "value"}:
+            rename_map[column] = "amount"
+        elif key in {"debit", "withdrawal", "money_out"}:
+            rename_map[column] = "debit"
+        elif key in {"credit", "deposit", "money_in"}:
+            rename_map[column] = "credit"
+        elif key in {"reference", "ref", "transaction_id"}:
+            rename_map[column] = "reference"
+
+    normalized = df.rename(columns=rename_map).copy()
+    missing = {"posted_at", "description"}.difference(normalized.columns)
+    if missing:
+        raise ValueError(f"bank feed missing required columns: {', '.join(sorted(missing))}")
+    if "amount" not in normalized.columns and not {"debit", "credit"}.intersection(normalized.columns):
+        raise ValueError("bank feed must include amount or debit/credit columns")
+
+    normalized["posted_at"] = pd.to_datetime(normalized["posted_at"], errors="coerce").dt.date
+    if normalized["posted_at"].isna().any():
+        raise ValueError("bank feed date column must contain valid dates")
+
+    def to_numeric_series(series):
+        return pd.to_numeric(series.astype(str).str.replace(",", "", regex=False).str.strip(), errors="coerce")
+
+    if "amount" in normalized.columns:
+        normalized["amount"] = to_numeric_series(normalized["amount"])
+    else:
+        credit = to_numeric_series(normalized.get("credit", pd.Series([0] * len(normalized))))
+        debit = to_numeric_series(normalized.get("debit", pd.Series([0] * len(normalized))))
+        normalized["amount"] = credit.fillna(0) - debit.fillna(0)
+
+    if normalized["amount"].isna().any():
+        raise ValueError("bank feed amount column must contain numeric values")
+
+    if "reference" not in normalized.columns:
+        normalized["reference"] = ""
+
+    normalized["description"] = normalized["description"].astype(str).str.strip()
+    return normalized[["posted_at", "description", "amount", "reference"]]
+
+
+def calculate_aging(documents, key_name):
+    buckets = {
+        "current": 0.0,
+        "days_1_30": 0.0,
+        "days_31_60": 0.0,
+        "days_61_90": 0.0,
+        "days_90_plus": 0.0,
+    }
+    items = []
+    today = today_utc_date()
+
+    for document in documents:
+        balance_due = round(float(document.balance_due or 0), 2)
+        if balance_due <= 0 or document.status in {"draft", "cancelled", "paid"}:
+            continue
+
+        days_past_due = max(0, (today - document.due_date).days) if document.due_date else 0
+        if days_past_due == 0:
+            buckets["current"] += balance_due
+        elif days_past_due <= 30:
+            buckets["days_1_30"] += balance_due
+        elif days_past_due <= 60:
+            buckets["days_31_60"] += balance_due
+        elif days_past_due <= 90:
+            buckets["days_61_90"] += balance_due
+        else:
+            buckets["days_90_plus"] += balance_due
+
+        items.append(
+            {
+                "id": document.id,
+                key_name: getattr(document, key_name),
+                "counterparty": getattr(document, "customer_name", None) or getattr(document, "vendor_name", ""),
+                "due_date": iso_date(document.due_date),
+                "status": document.status,
+                "balance_due": balance_due,
+                "days_past_due": days_past_due,
+            }
+        )
+
+    return {
+        "buckets": {key: round(value, 2) for key, value in buckets.items()},
+        "total_open": round(sum(buckets.values()), 2),
+        "overdue_count": sum(1 for item in items if item["days_past_due"] > 0),
+        "items": items,
+    }
+
+
+def calculate_finance_summary(company):
+    invoices, bills = refresh_finance_documents(company.id)
+    today = today_utc_date()
+
+    invoice_payments = CustomerPayment.query.filter_by(company_id=company.id).all()
+    bill_payments = VendorPayment.query.filter_by(company_id=company.id).all()
+    bank_transactions = BankFeedTransaction.query.filter_by(company_id=company.id).all()
+
+    open_receivables = sum(invoice.balance_due for invoice in invoices if invoice.status in {"sent", "partial", "overdue"})
+    overdue_receivables = sum(invoice.balance_due for invoice in invoices if invoice.status == "overdue")
+    open_payables = sum(bill.balance_due for bill in bills if bill.status in {"approved", "partial", "overdue"})
+    overdue_payables = sum(bill.balance_due for bill in bills if bill.status == "overdue")
+
+    collected_this_month = sum(
+        payment.amount
+        for payment in invoice_payments
+        if payment.payment_date and payment.payment_date.year == today.year and payment.payment_date.month == today.month
+    )
+    paid_this_month = sum(
+        payment.amount
+        for payment in bill_payments
+        if payment.payment_date and payment.payment_date.year == today.year and payment.payment_date.month == today.month
+    )
+
+    sales_tax_due = sum(invoice.tax_amount for invoice in invoices if invoice.status not in {"draft", "cancelled"})
+    purchase_tax_credit = sum(bill.tax_amount for bill in bills if bill.status not in {"draft", "cancelled"})
+
+    return {
+        "open_receivables": round(open_receivables, 2),
+        "overdue_receivables": round(overdue_receivables, 2),
+        "open_payables": round(open_payables, 2),
+        "overdue_payables": round(overdue_payables, 2),
+        "collected_this_month": round(collected_this_month, 2),
+        "paid_this_month": round(paid_this_month, 2),
+        "invoice_count": len(invoices),
+        "bill_count": len(bills),
+        "overdue_invoice_count": sum(1 for invoice in invoices if invoice.status == "overdue"),
+        "overdue_bill_count": sum(1 for bill in bills if bill.status == "overdue"),
+        "bank_unmatched_count": sum(1 for transaction in bank_transactions if transaction.status == "unmatched"),
+        "bank_net_flow": round(sum(float(transaction.amount or 0) for transaction in bank_transactions), 2),
+        "sales_tax_due": round(sales_tax_due, 2),
+        "purchase_tax_credit": round(purchase_tax_credit, 2),
+        "net_tax_due": round(sales_tax_due - purchase_tax_credit, 2),
+    }
+
+
+def calculate_tax_summary(company, profile=None):
+    profile = profile or get_or_create_tax_profile(company)
+    invoices, bills = refresh_finance_documents(company.id)
+    sales_tax_collected = sum(invoice.tax_amount for invoice in invoices if invoice.status not in {"draft", "cancelled"})
+    purchase_tax_credit = sum(bill.tax_amount for bill in bills if bill.status not in {"draft", "cancelled"})
+    taxable_profit = sum(invoice.subtotal for invoice in invoices if invoice.status not in {"draft", "cancelled"}) - sum(
+        bill.subtotal for bill in bills if bill.status not in {"draft", "cancelled"}
+    )
+    estimated_income_tax = max(0.0, taxable_profit) * (float(profile.income_tax_rate or 0) / 100)
+    return {
+        "jurisdiction_code": profile.jurisdiction_code,
+        "filing_frequency": profile.filing_frequency,
+        "currency_code": profile.currency_code,
+        "sales_tax_name": profile.sales_tax_name,
+        "purchase_tax_name": profile.purchase_tax_name,
+        "income_tax_rate": round(float(profile.income_tax_rate or 0), 2),
+        "indirect_tax_rate": round(float(profile.indirect_tax_rate or 0), 2),
+        "sales_tax_collected": round(sales_tax_collected, 2),
+        "purchase_tax_credit": round(purchase_tax_credit, 2),
+        "net_tax_due": round(sales_tax_collected - purchase_tax_credit, 2),
+        "taxable_profit": round(taxable_profit, 2),
+        "estimated_income_tax": round(estimated_income_tax, 2),
+        "effective_tax_rate": (float(profile.income_tax_rate or 0) / 100) if taxable_profit > 0 else 0.0,
+    }
+
+
+def build_reconciliation_suggestions(company):
+    invoices, bills = refresh_finance_documents(company.id)
+    invoice_candidates = [invoice for invoice in invoices if invoice.status in {"sent", "partial", "overdue"} and invoice.balance_due > 0]
+    bill_candidates = [bill for bill in bills if bill.status in {"approved", "partial", "overdue"} and bill.balance_due > 0]
+    transactions = (
+        BankFeedTransaction.query.filter(
+            BankFeedTransaction.company_id == company.id,
+            BankFeedTransaction.status.in_(["unmatched", "rule_matched"]),
+        )
+        .order_by(BankFeedTransaction.posted_at.desc(), BankFeedTransaction.id.desc())
+        .all()
+    )
+
+    suggestions = []
+    for transaction in transactions:
+        direction_candidates = invoice_candidates if float(transaction.amount or 0) >= 0 else bill_candidates
+        best_match = None
+        best_confidence = 0.0
+        for document in direction_candidates:
+            open_balance = round(float(document.balance_due or 0), 2)
+            transaction_amount = round(abs(float(transaction.amount or 0)), 2)
+            if transaction_amount <= 0 or open_balance <= 0 or transaction_amount > open_balance + 0.01:
+                continue
+
+            counterparty = getattr(document, "customer_name", None) or getattr(document, "vendor_name", "")
+            description = (transaction.description or "").lower()
+            counterparty_tokens = [token for token in counterparty.lower().split() if len(token) > 2]
+            text_match = any(token in description for token in counterparty_tokens)
+            amount_gap = abs(open_balance - transaction_amount)
+            exact_amount = amount_gap <= 0.01
+            date_proximity = abs((transaction.posted_at - document.due_date).days) if document.due_date else 30
+            confidence = 0.35
+            confidence += 0.35 if exact_amount else 0.15
+            confidence += 0.2 if text_match else 0.0
+            confidence += 0.1 if date_proximity <= 14 else 0.0
+
+            if confidence > best_confidence:
+                best_confidence = confidence
+                best_match = document
+
+        if best_match:
+            suggestions.append(
+                {
+                    "transaction": serialize_bank_transaction(transaction),
+                    "entity_type": "invoice" if float(transaction.amount or 0) >= 0 else "bill",
+                    "entity_id": best_match.id,
+                    "document_number": getattr(best_match, "invoice_number", None) or getattr(best_match, "bill_number", ""),
+                    "counterparty": getattr(best_match, "customer_name", None) or getattr(best_match, "vendor_name", ""),
+                    "open_balance": round(float(best_match.balance_due or 0), 2),
+                    "confidence": round(best_confidence, 2),
+                }
+            )
+
+    return sorted(suggestions, key=lambda item: item["confidence"], reverse=True)[:20]
+
+
+def get_invoice_for_user(user, invoice_id):
+    return Invoice.query.filter_by(id=invoice_id, org_id=user.org_id).first()
+
+
+def get_bill_for_user(user, bill_id):
+    return VendorBill.query.filter_by(id=bill_id, org_id=user.org_id).first()
+
+
+def get_bank_transaction_for_user(user, transaction_id):
+    return BankFeedTransaction.query.filter_by(id=transaction_id, org_id=user.org_id).first()
+
+
+def apply_customer_payment(invoice, amount, payment_date, reference="", source="manual", notes="", bank_transaction_id=None):
+    if amount <= 0:
+        raise ValueError("payment amount must be greater than 0")
+    refresh_invoice_status(invoice)
+    if amount - float(invoice.balance_due or 0) > 0.01:
+        raise ValueError("payment exceeds invoice balance")
+
+    db.session.add(
+        CustomerPayment(
+            org_id=invoice.org_id,
+            company_id=invoice.company_id,
+            invoice_id=invoice.id,
+            amount=round(amount, 2),
+            reference=(reference or "").strip() or None,
+            source=source,
+            notes=notes or None,
+            payment_date=payment_date,
+            bank_transaction_id=bank_transaction_id,
+        )
+    )
+    db.session.flush()
+    refresh_invoice_status(invoice)
+
+
+def apply_vendor_payment(bill, amount, payment_date, reference="", source="manual", notes="", bank_transaction_id=None):
+    if amount <= 0:
+        raise ValueError("payment amount must be greater than 0")
+    refresh_bill_status(bill)
+    if amount - float(bill.balance_due or 0) > 0.01:
+        raise ValueError("payment exceeds bill balance")
+
+    db.session.add(
+        VendorPayment(
+            org_id=bill.org_id,
+            company_id=bill.company_id,
+            bill_id=bill.id,
+            amount=round(amount, 2),
+            reference=(reference or "").strip() or None,
+            source=source,
+            notes=notes or None,
+            payment_date=payment_date,
+            bank_transaction_id=bank_transaction_id,
+        )
+    )
+    db.session.flush()
+    refresh_bill_status(bill)
+
+
+def plaid_enabled():
+    return bool(os.getenv("PLAID_CLIENT_ID") and os.getenv("PLAID_SECRET"))
+
+
+def plaid_base_url():
+    env = (os.getenv("PLAID_ENV", "sandbox") or "sandbox").strip().lower()
+    return PLAID_ENVIRONMENTS.get(env, PLAID_ENVIRONMENTS["sandbox"])
+
+
+def plaid_products():
+    raw = (os.getenv("PLAID_PRODUCTS", "transactions") or "transactions").strip()
+    return [value.strip() for value in raw.split(",") if value.strip()]
+
+
+def plaid_country_codes():
+    raw = (os.getenv("PLAID_COUNTRY_CODES", "US") or "US").strip()
+    return [value.strip().upper() for value in raw.split(",") if value.strip()]
+
+
+def call_plaid(endpoint, payload):
+    if not plaid_enabled():
+        raise ValueError("Plaid is not configured. Set PLAID_CLIENT_ID and PLAID_SECRET to enable direct bank connections.")
+
+    body = json.dumps(
+        {
+            "client_id": os.getenv("PLAID_CLIENT_ID"),
+            "secret": os.getenv("PLAID_SECRET"),
+            **payload,
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        url=f"{plaid_base_url()}{endpoint}",
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="ignore")
+        try:
+            payload = json.loads(raw)
+            message = payload.get("error_message") or payload.get("display_message") or raw or "Plaid request failed"
+        except (TypeError, ValueError):
+            message = raw or "Plaid request failed"
+        raise ValueError(message) from exc
+    except urllib.error.URLError as exc:
+        raise ValueError("Unable to reach Plaid. Check network access and PLAID_ENV.") from exc
+
+
+def serialize_bank_connection(connection):
+    return {
+        "id": connection.id,
+        "provider": connection.provider,
+        "institution_name": connection.institution_name or "Connected bank",
+        "status": connection.status,
+        "item_id": connection.item_id,
+        "company_id": connection.company_id,
+        "created_at": connection.created_at.isoformat() if connection.created_at else None,
+        "updated_at": connection.updated_at.isoformat() if connection.updated_at else None,
+    }
+
+
+def get_or_create_tax_profile(company):
+    profile = TaxProfile.query.filter_by(company_id=company.id).first()
+    if profile:
+        return profile
+
+    profile = TaxProfile(
+        org_id=company.org_id,
+        company_id=company.id,
+        jurisdiction_code=(os.getenv("DEFAULT_TAX_JURISDICTION", "generic") or "generic").strip().lower(),
+        filing_frequency=(os.getenv("DEFAULT_TAX_FILING_FREQUENCY", "monthly") or "monthly").strip().lower(),
+        currency_code=(os.getenv("DEFAULT_TAX_CURRENCY", "USD") or "USD").strip().upper(),
+        sales_tax_name=(os.getenv("DEFAULT_SALES_TAX_NAME", "Sales Tax") or "Sales Tax").strip(),
+        purchase_tax_name=(os.getenv("DEFAULT_PURCHASE_TAX_NAME", "Purchase Tax Credit") or "Purchase Tax Credit").strip(),
+        indirect_tax_rate=float(os.getenv("DEFAULT_INDIRECT_TAX_RATE", "16") or 16),
+        income_tax_rate=float(os.getenv("DEFAULT_INCOME_TAX_RATE", "30") or 30),
+        period_start_month=int(os.getenv("DEFAULT_TAX_PERIOD_START_MONTH", "1") or 1),
+    )
+    db.session.add(profile)
+    safe_commit()
+    return profile
+
+
+def serialize_tax_profile(profile):
+    return {
+        "jurisdiction_code": profile.jurisdiction_code,
+        "filing_frequency": profile.filing_frequency,
+        "registration_number": profile.registration_number or "",
+        "currency_code": profile.currency_code,
+        "sales_tax_name": profile.sales_tax_name,
+        "purchase_tax_name": profile.purchase_tax_name,
+        "indirect_tax_rate": round(float(profile.indirect_tax_rate or 0), 2),
+        "income_tax_rate": round(float(profile.income_tax_rate or 0), 2),
+        "period_start_month": int(profile.period_start_month or 1),
+    }
+
+
+def current_tax_period(profile):
+    today = today_utc_date()
+    if profile.filing_frequency == "annual":
+        start = datetime.date(today.year, max(1, min(12, profile.period_start_month or 1)), 1)
+        if today < start:
+            start = datetime.date(today.year - 1, start.month, 1)
+        end = datetime.date(start.year + 1, start.month, 1) - datetime.timedelta(days=1)
+        return start, end
+
+    if profile.filing_frequency == "quarterly":
+        quarter_index = (today.month - 1) // 3
+        start_month = quarter_index * 3 + 1
+        start = datetime.date(today.year, start_month, 1)
+        if start_month == 10:
+            end = datetime.date(today.year + 1, 1, 1) - datetime.timedelta(days=1)
+        else:
+            end = datetime.date(today.year, start_month + 3, 1) - datetime.timedelta(days=1)
+        return start, end
+
+    start = datetime.date(today.year, today.month, 1)
+    if today.month == 12:
+        end = datetime.date(today.year + 1, 1, 1) - datetime.timedelta(days=1)
+    else:
+        end = datetime.date(today.year, today.month + 1, 1) - datetime.timedelta(days=1)
+    return start, end
+
+
+def build_tax_filing_preview(company, profile, period_start=None, period_end=None):
+    start = parse_iso_date(period_start, "period_start") if period_start else None
+    end = parse_iso_date(period_end, "period_end") if period_end else None
+    if not start or not end:
+        start, end = current_tax_period(profile)
+
+    invoices, bills = refresh_finance_documents(company.id)
+    scoped_invoices = [
+        invoice for invoice in invoices
+        if invoice.status not in {"draft", "cancelled"} and invoice.issue_date and start <= invoice.issue_date <= end
+    ]
+    scoped_bills = [
+        bill for bill in bills
+        if bill.status not in {"draft", "cancelled"} and bill.issue_date and start <= bill.issue_date <= end
+    ]
+
+    sales_tax_collected = sum(float(invoice.tax_amount or 0) for invoice in scoped_invoices)
+    purchase_tax_credit = sum(float(bill.tax_amount or 0) for bill in scoped_bills)
+    taxable_profit = sum(float(invoice.subtotal or 0) for invoice in scoped_invoices) - sum(float(bill.subtotal or 0) for bill in scoped_bills)
+    estimated_income_tax = max(0.0, taxable_profit) * (float(profile.income_tax_rate or 0) / 100)
+
+    return {
+        "period_start": iso_date(start),
+        "period_end": iso_date(end),
+        "jurisdiction_code": profile.jurisdiction_code,
+        "filing_frequency": profile.filing_frequency,
+        "sales_tax_name": profile.sales_tax_name,
+        "purchase_tax_name": profile.purchase_tax_name,
+        "currency_code": profile.currency_code,
+        "sales_tax_collected": round(sales_tax_collected, 2),
+        "purchase_tax_credit": round(purchase_tax_credit, 2),
+        "net_tax_due": round(sales_tax_collected - purchase_tax_credit, 2),
+        "taxable_profit": round(taxable_profit, 2),
+        "estimated_income_tax": round(estimated_income_tax, 2),
+        "documents": {
+            "sales_documents": len(scoped_invoices),
+            "purchase_documents": len(scoped_bills),
+        },
+    }
+
+
+def seed_chart_of_accounts(company):
+    created = 0
+    for template in DEFAULT_CHART_OF_ACCOUNTS:
+        existing = LedgerAccount.query.filter_by(company_id=company.id, code=template["code"]).first()
+        if existing:
+            continue
+        db.session.add(
+            LedgerAccount(
+                org_id=company.org_id,
+                company_id=company.id,
+                code=template["code"],
+                name=template["name"],
+                category=template["category"],
+                subtype=template.get("subtype"),
+                normal_balance=template.get("normal_balance", "debit"),
+                description=template.get("description"),
+                is_system=True,
+                is_active=True,
+            )
+        )
+        created += 1
+    if created:
+        db.session.flush()
+    return created
+
+
+def serialize_ledger_account(account):
+    return {
+        "id": account.id,
+        "code": account.code,
+        "name": account.name,
+        "category": account.category,
+        "subtype": account.subtype or "",
+        "normal_balance": account.normal_balance,
+        "is_system": bool(account.is_system),
+        "is_active": bool(account.is_active),
+        "description": account.description or "",
+    }
+
+
+def journal_lines_for(entry_id):
+    return JournalLine.query.filter_by(journal_entry_id=entry_id).order_by(JournalLine.line_number.asc(), JournalLine.id.asc()).all()
+
+
+def get_company_account(company_id, account_id=None, account_code=None):
+    if account_id is not None:
+        return LedgerAccount.query.filter_by(company_id=company_id, id=account_id).first()
+    if account_code:
+        return LedgerAccount.query.filter_by(company_id=company_id, code=str(account_code).strip()).first()
+    return None
+
+
+def generate_journal_number(company_id):
+    next_number = JournalEntry.query.filter_by(company_id=company_id).count() + 1
+    return f"JE-{int(company_id):03d}-{next_number:05d}"
+
+
+def serialize_journal_entry(entry):
+    lines = []
+    for line in journal_lines_for(entry.id):
+        account = db.session.get(LedgerAccount, line.account_id)
+        lines.append(
+            {
+                "id": line.id,
+                "account_id": line.account_id,
+                "account_code": account.code if account else "",
+                "account_name": account.name if account else "",
+                "project_id": line.project_id,
+                "description": line.description or "",
+                "debit": round(float(line.debit or 0), 2),
+                "credit": round(float(line.credit or 0), 2),
+            }
+        )
+
+    return {
+        "id": entry.id,
+        "entry_number": entry.entry_number,
+        "entry_date": iso_date(entry.entry_date),
+        "memo": entry.memo,
+        "reference": entry.reference or "",
+        "source_type": entry.source_type,
+        "source_id": entry.source_id,
+        "status": entry.status,
+        "reverses_entry_id": entry.reverses_entry_id,
+        "lines": lines,
+    }
+
+
+def normalize_journal_lines(company, lines):
+    if not isinstance(lines, list) or len(lines) < 2:
+        raise ValueError("journal entry requires at least two lines")
+
+    normalized = []
+    debit_total = 0.0
+    credit_total = 0.0
+
+    for index, raw_line in enumerate(lines, start=1):
+        payload = raw_line or {}
+        account = get_company_account(company.id, payload.get("account_id"), payload.get("account_code"))
+        if not account:
+            raise ValueError(f"journal line {index} references an unknown account")
+
+        debit = parse_money(payload.get("debit", 0), f"journal line {index} debit")
+        credit = parse_money(payload.get("credit", 0), f"journal line {index} credit")
+        if debit > 0 and credit > 0:
+            raise ValueError(f"journal line {index} cannot contain both debit and credit")
+        if debit <= 0 and credit <= 0:
+            raise ValueError(f"journal line {index} must contain a debit or credit amount")
+
+        normalized.append(
+            {
+                "account_id": account.id,
+                "project_id": payload.get("project_id"),
+                "description": (payload.get("description") or "").strip() or None,
+                "debit": debit,
+                "credit": credit,
+            }
+        )
+        debit_total += debit
+        credit_total += credit
+
+    if round(debit_total, 2) != round(credit_total, 2):
+        raise ValueError("journal entry debits and credits must balance")
+
+    return normalized, round(debit_total, 2), round(credit_total, 2)
+
+
+def post_journal_entry(company, user, entry_date, memo, lines, source_type="manual", source_id=None, reference=None):
+    seed_chart_of_accounts(company)
+    normalized_lines, _, _ = normalize_journal_lines(company, lines)
+    entry = JournalEntry(
+        org_id=company.org_id,
+        company_id=company.id,
+        entry_number=generate_journal_number(company.id),
+        entry_date=entry_date,
+        memo=memo,
+        reference=(reference or "").strip() or None,
+        source_type=(source_type or "manual").strip().lower(),
+        source_id=source_id,
+        status="posted",
+        created_by=user.id,
+    )
+    db.session.add(entry)
+    db.session.flush()
+
+    for index, line in enumerate(normalized_lines, start=1):
+        db.session.add(
+            JournalLine(
+                journal_entry_id=entry.id,
+                account_id=line["account_id"],
+                project_id=line["project_id"],
+                line_number=index,
+                description=line["description"],
+                debit=line["debit"],
+                credit=line["credit"],
+            )
+        )
+
+    db.session.flush()
+    return entry
+
+
+def source_entry_exists(company_id, source_type, source_id):
+    if source_id is None:
+        return False
+    return (
+        JournalEntry.query.filter_by(
+            company_id=company_id,
+            source_type=(source_type or "").strip().lower(),
+            source_id=source_id,
+        )
+        .filter(JournalEntry.status.in_(["posted", "reversed"]))
+        .first()
+        is not None
+    )
+
+
+def post_operational_entry(company, user, source_type, source_id, memo, lines, entry_date=None, reference=None):
+    if source_entry_exists(company.id, source_type, source_id):
+        return None
+    return post_journal_entry(
+        company,
+        user,
+        entry_date or today_utc_date(),
+        memo=memo,
+        lines=lines,
+        source_type=source_type,
+        source_id=source_id,
+        reference=reference,
+    )
+
+
+def reverse_source_entries(company, user, source_type, source_id, memo):
+    entries = (
+        JournalEntry.query.filter_by(
+            company_id=company.id,
+            source_type=(source_type or "").strip().lower(),
+            source_id=source_id,
+            status="posted",
+        )
+        .order_by(JournalEntry.id.asc())
+        .all()
+    )
+    reversed_entries = []
+    for entry in entries:
+        reversal_lines = []
+        for line in journal_lines_for(entry.id):
+            reversal_lines.append(
+                {
+                    "account_id": line.account_id,
+                    "project_id": line.project_id,
+                    "description": f"Reversal of {entry.entry_number}",
+                    "debit": round(float(line.credit or 0), 2),
+                    "credit": round(float(line.debit or 0), 2),
+                }
+            )
+        reversal = post_journal_entry(
+            company,
+            user,
+            today_utc_date(),
+            memo=memo,
+            lines=reversal_lines,
+            source_type=f"{source_type}_reversal",
+            source_id=source_id,
+            reference=entry.entry_number,
+        )
+        reversal.reverses_entry_id = entry.id
+        entry.status = "reversed"
+        reversed_entries.append(reversal)
+    return reversed_entries
+
+
+def build_trial_balance(company):
+    seed_chart_of_accounts(company)
+    accounts = LedgerAccount.query.filter_by(company_id=company.id).order_by(LedgerAccount.code.asc()).all()
+    lines = (
+        db.session.query(JournalLine, JournalEntry)
+        .join(JournalEntry, JournalLine.journal_entry_id == JournalEntry.id)
+        .filter(JournalEntry.company_id == company.id, JournalEntry.status.in_(["posted", "reversed"]))
+        .all()
+    )
+    balance_map = {account.id: {"debit": 0.0, "credit": 0.0} for account in accounts}
+    for line, _entry in lines:
+        bucket = balance_map.setdefault(line.account_id, {"debit": 0.0, "credit": 0.0})
+        bucket["debit"] += float(line.debit or 0)
+        bucket["credit"] += float(line.credit or 0)
+
+    items = []
+    debit_total = 0.0
+    credit_total = 0.0
+    for account in accounts:
+        totals = balance_map.get(account.id, {"debit": 0.0, "credit": 0.0})
+        debit_total += totals["debit"]
+        credit_total += totals["credit"]
+        items.append(
+            {
+                **serialize_ledger_account(account),
+                "debit_total": round(totals["debit"], 2),
+                "credit_total": round(totals["credit"], 2),
+                "net_balance": round(totals["debit"] - totals["credit"], 2),
+            }
+        )
+
+    return {
+        "items": items,
+        "debit_total": round(debit_total, 2),
+        "credit_total": round(credit_total, 2),
+        "balanced": round(debit_total, 2) == round(credit_total, 2),
+    }
+
+
+def build_account_register(company, account):
+    rows = (
+        db.session.query(JournalLine, JournalEntry)
+        .join(JournalEntry, JournalLine.journal_entry_id == JournalEntry.id)
+        .filter(JournalEntry.company_id == company.id, JournalLine.account_id == account.id)
+        .order_by(JournalEntry.entry_date.asc(), JournalEntry.id.asc(), JournalLine.id.asc())
+        .all()
+    )
+
+    running_balance = 0.0
+    items = []
+    for line, entry in rows:
+        debit = round(float(line.debit or 0), 2)
+        credit = round(float(line.credit or 0), 2)
+        movement = debit - credit if account.normal_balance == "debit" else credit - debit
+        running_balance = round(running_balance + movement, 2)
+        items.append(
+            {
+                "entry_id": entry.id,
+                "entry_number": entry.entry_number,
+                "entry_date": iso_date(entry.entry_date),
+                "memo": entry.memo,
+                "reference": entry.reference or "",
+                "debit": debit,
+                "credit": credit,
+                "running_balance": running_balance,
+                "status": entry.status,
+            }
+        )
+
+    return {
+        "account": serialize_ledger_account(account),
+        "items": items,
+        "ending_balance": running_balance,
+    }
+
+
+def build_accounting_overview(company):
+    trial_balance = build_trial_balance(company)
+    recent_entries = (
+        JournalEntry.query.filter_by(company_id=company.id)
+        .order_by(JournalEntry.entry_date.desc(), JournalEntry.id.desc())
+        .limit(8)
+        .all()
+    )
+    return {
+        "account_count": len(trial_balance["items"]),
+        "journal_count": JournalEntry.query.filter_by(company_id=company.id).count(),
+        "trial_balance": trial_balance,
+        "recent_entries": [serialize_journal_entry(entry) for entry in recent_entries],
+    }
+
+
+def serialize_vendor_profile(vendor):
+    return {
+        "id": vendor.id,
+        "vendor_name": vendor.vendor_name,
+        "email": vendor.email or "",
+        "tax_id": vendor.tax_id or "",
+        "default_payment_rail": vendor.default_payment_rail,
+        "remittance_reference": vendor.remittance_reference or "",
+        "bank_last4": vendor.bank_last4 or "",
+        "is_1099_eligible": bool(vendor.is_1099_eligible),
+        "tax_form_type": vendor.tax_form_type,
+        "tin_status": vendor.tin_status,
+    }
+
+
+def get_or_create_vendor_profile(company, vendor_name, defaults=None):
+    normalized_name = (vendor_name or "").strip()
+    if not normalized_name:
+        raise ValueError("vendor_name is required")
+    vendor = VendorProfile.query.filter_by(company_id=company.id, vendor_name=normalized_name).first()
+    if vendor:
+        return vendor
+
+    defaults = defaults or {}
+    vendor = VendorProfile(
+        org_id=company.org_id,
+        company_id=company.id,
+        vendor_name=normalized_name,
+        email=(defaults.get("email") or "").strip().lower() or None,
+        tax_id=(defaults.get("tax_id") or "").strip() or None,
+        default_payment_rail=(defaults.get("default_payment_rail") or "ach").strip().lower(),
+        remittance_reference=(defaults.get("remittance_reference") or "").strip() or None,
+        bank_last4=(defaults.get("bank_last4") or "").strip()[-4:] or None,
+        is_1099_eligible=parse_bool(defaults.get("is_1099_eligible"), False),
+        tax_form_type=(defaults.get("tax_form_type") or "1099-NEC").strip().upper(),
+        tin_status=(defaults.get("tin_status") or "pending").strip().lower(),
+    )
+    db.session.add(vendor)
+    db.session.flush()
+    return vendor
+
+
+def serialize_disbursement(disbursement):
+    bill = db.session.get(VendorBill, disbursement.bill_id)
+    vendor = db.session.get(VendorProfile, disbursement.vendor_profile_id) if disbursement.vendor_profile_id else None
+    return {
+        "id": disbursement.id,
+        "bill_id": disbursement.bill_id,
+        "bill_number": bill.bill_number if bill else "",
+        "vendor_name": vendor.vendor_name if vendor else (bill.vendor_name if bill else ""),
+        "payment_rail": disbursement.payment_rail,
+        "status": disbursement.status,
+        "scheduled_date": iso_date(disbursement.scheduled_date),
+        "processed_at": disbursement.processed_at.isoformat() if disbursement.processed_at else None,
+        "amount": round(float(disbursement.amount or 0), 2),
+        "reference": disbursement.reference or "",
+        "confirmation_code": disbursement.confirmation_code or "",
+        "compliance_status": disbursement.compliance_status,
+    }
+
+
+def build_1099_summary(company, year=None):
+    scoped_year = year or today_utc_date().year
+    vendors = VendorProfile.query.filter_by(company_id=company.id).order_by(VendorProfile.vendor_name.asc()).all()
+    items = []
+    total_reportable = 0.0
+    for vendor in vendors:
+        payments_total = 0.0
+        vendor_bills = VendorBill.query.filter_by(company_id=company.id, vendor_name=vendor.vendor_name).all()
+        for bill in vendor_bills:
+            payments = VendorPayment.query.filter_by(bill_id=bill.id).all()
+            for payment in payments:
+                if payment.payment_date and payment.payment_date.year == scoped_year:
+                    payments_total += float(payment.amount or 0)
+
+        if payments_total <= 0 and not vendor.is_1099_eligible:
+            continue
+
+        total_reportable += payments_total
+        items.append(
+            {
+                **serialize_vendor_profile(vendor),
+                "year": scoped_year,
+                "reportable_payments": round(payments_total, 2),
+                "threshold_status": "ready" if payments_total >= 600 else "below_threshold",
+            }
+        )
+
+    return {
+        "year": scoped_year,
+        "items": items,
+        "reportable_total": round(total_reportable, 2),
+        "ready_count": sum(1 for item in items if item["threshold_status"] == "ready"),
+    }
+
+
+def build_bill_pay_summary(company):
+    disbursements = BillDisbursement.query.filter_by(company_id=company.id).order_by(BillDisbursement.id.desc()).all()
+    return {
+        "scheduled_count": sum(1 for item in disbursements if item.status == "scheduled"),
+        "processing_count": sum(1 for item in disbursements if item.status == "processing"),
+        "completed_count": sum(1 for item in disbursements if item.status == "completed"),
+        "scheduled_amount": round(sum(float(item.amount or 0) for item in disbursements if item.status == "scheduled"), 2),
+        "completed_amount": round(sum(float(item.amount or 0) for item in disbursements if item.status == "completed"), 2),
+        "items": [serialize_disbursement(item) for item in disbursements[:20]],
+    }
+
+
+def serialize_reconciliation_rule(rule):
+    return {
+        "id": rule.id,
+        "name": rule.name,
+        "keyword": rule.keyword or "",
+        "direction": rule.direction,
+        "min_amount": round(float(rule.min_amount or 0), 2) if rule.min_amount is not None else None,
+        "max_amount": round(float(rule.max_amount or 0), 2) if rule.max_amount is not None else None,
+        "auto_action": rule.auto_action,
+        "target_reference": rule.target_reference or "",
+        "exception_type": rule.exception_type or "",
+        "priority": rule.priority,
+        "is_active": bool(rule.is_active),
+    }
+
+
+def serialize_reconciliation_exception(exception):
+    transaction = db.session.get(BankFeedTransaction, exception.bank_transaction_id)
+    return {
+        "id": exception.id,
+        "bank_transaction_id": exception.bank_transaction_id,
+        "transaction": serialize_bank_transaction(transaction) if transaction else None,
+        "exception_type": exception.exception_type,
+        "notes": exception.notes or "",
+        "status": exception.status,
+        "resolved_at": exception.resolved_at.isoformat() if exception.resolved_at else None,
+    }
+
+
+def rule_matches_transaction(rule, transaction):
+    description = (transaction.description or "").lower()
+    absolute_amount = round(abs(float(transaction.amount or 0)), 2)
+    direction = "inflow" if float(transaction.amount or 0) >= 0 else "outflow"
+
+    if rule.direction != "any" and direction != rule.direction:
+        return False
+    if rule.keyword and rule.keyword.strip().lower() not in description:
+        return False
+    if rule.min_amount is not None and absolute_amount < float(rule.min_amount):
+        return False
+    if rule.max_amount is not None and absolute_amount > float(rule.max_amount):
+        return False
+    return True
+
+
+def auto_apply_reconciliation_rules(company, user=None):
+    rules = (
+        ReconciliationRule.query.filter_by(company_id=company.id, is_active=True)
+        .order_by(ReconciliationRule.priority.asc(), ReconciliationRule.id.asc())
+        .all()
+    )
+    if not rules:
+        return {"matched": 0, "exceptions": 0, "items": []}
+
+    transactions = (
+        BankFeedTransaction.query.filter(
+            BankFeedTransaction.company_id == company.id,
+            BankFeedTransaction.status.in_(["unmatched", "rule_matched"]),
+        )
+        .order_by(BankFeedTransaction.posted_at.desc(), BankFeedTransaction.id.desc())
+        .all()
+    )
+
+    matched = 0
+    exceptions = 0
+    items = []
+    actor_id = user.id if user else 0
+    for transaction in transactions:
+        selected_rule = None
+        for rule in rules:
+            if rule_matches_transaction(rule, transaction):
+                selected_rule = rule
+                break
+        if not selected_rule:
+            continue
+
+        payload = {
+            "transaction": serialize_bank_transaction(transaction),
+            "rule": serialize_reconciliation_rule(selected_rule),
+        }
+        if selected_rule.auto_action == "flag_exception":
+            existing_exception = ReconciliationException.query.filter_by(
+                company_id=company.id,
+                bank_transaction_id=transaction.id,
+                status="open",
+            ).first()
+            if not existing_exception:
+                db.session.add(
+                    ReconciliationException(
+                        org_id=company.org_id,
+                        company_id=company.id,
+                        bank_transaction_id=transaction.id,
+                        exception_type=(selected_rule.exception_type or "review_required").strip() or "review_required",
+                        notes=f"Raised by rule {selected_rule.name}",
+                        created_by=actor_id,
+                    )
+                )
+                exceptions += 1
+            transaction.status = "exception"
+            payload["result"] = "exception"
+        else:
+            transaction.status = "rule_matched"
+            matched += 1
+            payload["result"] = "rule_matched"
+        items.append(payload)
+
+    if items:
+        safe_commit()
+    return {"matched": matched, "exceptions": exceptions, "items": items}
+
+
+def build_reconciliation_workspace(company):
+    transactions = (
+        BankFeedTransaction.query.filter_by(company_id=company.id)
+        .order_by(BankFeedTransaction.posted_at.desc(), BankFeedTransaction.id.desc())
+        .limit(80)
+        .all()
+    )
+    rules = (
+        ReconciliationRule.query.filter_by(company_id=company.id)
+        .order_by(ReconciliationRule.priority.asc(), ReconciliationRule.id.asc())
+        .all()
+    )
+    exceptions = (
+        ReconciliationException.query.filter_by(company_id=company.id)
+        .order_by(ReconciliationException.created_at.desc(), ReconciliationException.id.desc())
+        .limit(20)
+        .all()
+    )
+    return {
+        "summary": {
+            "unmatched": sum(1 for row in transactions if row.status == "unmatched"),
+            "rule_matched": sum(1 for row in transactions if row.status == "rule_matched"),
+            "matched": sum(1 for row in transactions if row.status == "matched"),
+            "exceptions": sum(1 for row in transactions if row.status == "exception"),
+        },
+        "transactions": [serialize_bank_transaction(row) for row in transactions],
+        "rules": [serialize_reconciliation_rule(rule) for rule in rules],
+        "exceptions": [serialize_reconciliation_exception(item) for item in exceptions],
+    }
+
+
+def serialize_tax_filing(filing):
+    payload = {}
+    try:
+        payload = json.loads(filing.payload_json or "{}")
+    except (TypeError, ValueError):
+        payload = {}
+
+    return {
+        "id": filing.id,
+        "jurisdiction_code": filing.jurisdiction_code,
+        "filing_frequency": filing.filing_frequency,
+        "filing_type": filing.filing_type,
+        "period_start": iso_date(filing.period_start),
+        "period_end": iso_date(filing.period_end),
+        "status": filing.status,
+        "reference": filing.reference or "",
+        "prepared_at": filing.prepared_at.isoformat() if filing.prepared_at else None,
+        "submitted_at": filing.submitted_at.isoformat() if filing.submitted_at else None,
+        "payload": payload,
+    }
+
+
+def build_tax_filing_package(company, profile, period_start=None, period_end=None):
+    preview = build_tax_filing_preview(company, profile, period_start=period_start, period_end=period_end)
+    jurisdiction = TAX_JURISDICTION_LIBRARY.get(profile.jurisdiction_code, TAX_JURISDICTION_LIBRARY["generic"])
+    labels = jurisdiction["return_labels"]
+    taxable_sales = round(sum(float(invoice.subtotal or 0) for invoice in refresh_finance_documents(company.id)[0]), 2)
+    line_values = {
+        "taxable_sales": taxable_sales,
+        "tax_collected": preview["sales_tax_collected"],
+        "tax_credit": preview["purchase_tax_credit"],
+        "net_tax_due": preview["net_tax_due"],
+        "vatable_sales": taxable_sales,
+        "output_vat": preview["sales_tax_collected"],
+        "input_vat": preview["purchase_tax_credit"],
+        "vat_payable": preview["net_tax_due"],
+        "sales_tax_collected": preview["sales_tax_collected"],
+        "exempt_sales": 0.0,
+        "net_sales_tax_due": preview["net_tax_due"],
+        "vat_due_sales": preview["sales_tax_collected"],
+        "vat_reclaimed": preview["purchase_tax_credit"],
+        "net_vat_due": preview["net_tax_due"],
+        "total_sales_ex_vat": taxable_sales,
+        "gst_hst_collected": preview["sales_tax_collected"],
+        "input_tax_credits": preview["purchase_tax_credit"],
+        "net_gst_hst_due": preview["net_tax_due"],
+        "taxable_supplies": taxable_sales,
+        "gst_collected": preview["sales_tax_collected"],
+        "gst_credits": preview["purchase_tax_credit"],
+        "net_gst_due": preview["net_tax_due"],
+    }
+    return {
+        "jurisdiction": {
+            "code": profile.jurisdiction_code,
+            "name": jurisdiction["name"],
+            "filing_type": jurisdiction["filing_type"],
+        },
+        "profile": serialize_tax_profile(profile),
+        "preview": preview,
+        "return_lines": [{"label": label, "value": round(float(line_values.get(label, 0) or 0), 2)} for label in labels],
+    }
+
+
+def worker_display_name(employee_id=None, contractor_id=None):
+    if employee_id:
+        employee = db.session.get(EmployeeProfile, employee_id)
+        return employee.full_name if employee else "Employee"
+    if contractor_id:
+        contractor = db.session.get(ContractorProfile, contractor_id)
+        return contractor.full_name if contractor else "Contractor"
+    return "Unknown Worker"
+
+
+def serialize_employee(employee):
+    return {
+        "id": employee.id,
+        "full_name": employee.full_name,
+        "email": employee.email or "",
+        "pay_type": employee.pay_type,
+        "hourly_rate": round(float(employee.hourly_rate or 0), 2),
+        "salary_amount": round(float(employee.salary_amount or 0), 2),
+        "withholding_rate": round(float(employee.withholding_rate or 0), 2),
+        "benefit_rate": round(float(employee.benefit_rate or 0), 2),
+        "is_active": bool(employee.is_active),
+    }
+
+
+def serialize_contractor(contractor):
+    return {
+        "id": contractor.id,
+        "full_name": contractor.full_name,
+        "email": contractor.email or "",
+        "tax_id": contractor.tax_id or "",
+        "default_rate": round(float(contractor.default_rate or 0), 2),
+        "is_1099_eligible": bool(contractor.is_1099_eligible),
+        "tax_form_type": contractor.tax_form_type,
+        "is_active": bool(contractor.is_active),
+    }
+
+
+def serialize_time_entry(entry):
+    return {
+        "id": entry.id,
+        "employee_id": entry.employee_id,
+        "contractor_id": entry.contractor_id,
+        "project_id": entry.project_id,
+        "worker_name": worker_display_name(entry.employee_id, entry.contractor_id),
+        "work_date": iso_date(entry.work_date),
+        "hours": round(float(entry.hours or 0), 2),
+        "hourly_cost": round(float(entry.hourly_cost or 0), 2),
+        "billable_rate": round(float(entry.billable_rate or 0), 2),
+        "status": entry.status,
+        "description": entry.description or "",
+    }
+
+
+def serialize_mileage_entry(entry):
+    reimbursement = round(float(entry.miles or 0) * float(entry.rate_per_mile or 0), 2)
+    return {
+        "id": entry.id,
+        "employee_id": entry.employee_id,
+        "contractor_id": entry.contractor_id,
+        "project_id": entry.project_id,
+        "worker_name": worker_display_name(entry.employee_id, entry.contractor_id),
+        "trip_date": iso_date(entry.trip_date),
+        "miles": round(float(entry.miles or 0), 2),
+        "rate_per_mile": round(float(entry.rate_per_mile or 0), 4),
+        "reimbursement": reimbursement,
+        "purpose": entry.purpose or "",
+        "status": entry.status,
+    }
+
+
+def serialize_payroll_run(payroll):
+    lines = PayrollLine.query.filter_by(payroll_run_id=payroll.id).order_by(PayrollLine.id.asc()).all()
+    return {
+        "id": payroll.id,
+        "payroll_number": payroll.payroll_number,
+        "period_start": iso_date(payroll.period_start),
+        "period_end": iso_date(payroll.period_end),
+        "pay_date": iso_date(payroll.pay_date),
+        "status": payroll.status,
+        "gross_pay": round(float(payroll.gross_pay or 0), 2),
+        "withholding_total": round(float(payroll.withholding_total or 0), 2),
+        "benefit_total": round(float(payroll.benefit_total or 0), 2),
+        "mileage_reimbursement_total": round(float(payroll.mileage_reimbursement_total or 0), 2),
+        "net_cash": round(float(payroll.net_cash or 0), 2),
+        "lines": [
+            {
+                "id": line.id,
+                "employee_id": line.employee_id,
+                "employee_name": worker_display_name(employee_id=line.employee_id),
+                "regular_hours": round(float(line.regular_hours or 0), 2),
+                "gross_pay": round(float(line.gross_pay or 0), 2),
+                "withholding_amount": round(float(line.withholding_amount or 0), 2),
+                "benefit_amount": round(float(line.benefit_amount or 0), 2),
+                "mileage_reimbursement": round(float(line.mileage_reimbursement or 0), 2),
+                "net_pay": round(float(line.net_pay or 0), 2),
+            }
+            for line in lines
+        ],
+    }
+
+
+def generate_payroll_number(company_id):
+    next_number = PayrollRun.query.filter_by(company_id=company_id).count() + 1
+    return f"PAY-{int(company_id):03d}-{next_number:05d}"
+
+
+def build_workforce_overview(company):
+    today = today_utc_date()
+    month_start = datetime.date(today.year, today.month, 1)
+    employees = EmployeeProfile.query.filter_by(company_id=company.id).all()
+    contractors = ContractorProfile.query.filter_by(company_id=company.id).all()
+    time_entries = TimeEntry.query.filter_by(company_id=company.id).all()
+    mileage_entries = MileageEntry.query.filter_by(company_id=company.id).all()
+    payroll_runs = PayrollRun.query.filter_by(company_id=company.id).all()
+
+    return {
+        "employee_count": sum(1 for row in employees if row.is_active),
+        "contractor_count": sum(1 for row in contractors if row.is_active),
+        "hours_this_month": round(
+            sum(float(row.hours or 0) for row in time_entries if row.work_date and row.work_date >= month_start),
+            2,
+        ),
+        "mileage_this_month": round(
+            sum(float(row.miles or 0) for row in mileage_entries if row.trip_date and row.trip_date >= month_start),
+            2,
+        ),
+        "payroll_this_month": round(
+            sum(float(run.net_cash or 0) for run in payroll_runs if run.pay_date and run.pay_date >= month_start),
+            2,
+        ),
+        "contractor_1099_exposure": round(
+            sum(float(row.hours or 0) * float(row.hourly_cost or 0) for row in time_entries if row.contractor_id),
+            2,
+        ),
+    }
+
+
+def serialize_inventory_item(item):
+    return {
+        "id": item.id,
+        "sku": item.sku,
+        "name": item.name,
+        "category": item.category or "",
+        "quantity_on_hand": round(float(item.quantity_on_hand or 0), 2),
+        "reorder_point": round(float(item.reorder_point or 0), 2),
+        "reorder_quantity": round(float(item.reorder_quantity or 0), 2),
+        "unit_cost": round(float(item.unit_cost or 0), 2),
+        "unit_price": round(float(item.unit_price or 0), 2),
+        "inventory_value": round(float(item.quantity_on_hand or 0) * float(item.unit_cost or 0), 2),
+        "preferred_vendor_name": item.preferred_vendor_name or "",
+        "needs_reorder": float(item.quantity_on_hand or 0) <= float(item.reorder_point or 0),
+    }
+
+
+def purchase_order_lines_for(po_id):
+    return PurchaseOrderLine.query.filter_by(purchase_order_id=po_id).order_by(PurchaseOrderLine.id.asc()).all()
+
+
+def serialize_purchase_order(po):
+    lines = purchase_order_lines_for(po.id)
+    return {
+        "id": po.id,
+        "po_number": po.po_number,
+        "vendor_name": po.vendor_name,
+        "status": po.status,
+        "issue_date": iso_date(po.issue_date),
+        "expected_date": iso_date(po.expected_date),
+        "notes": po.notes or "",
+        "items": [
+            {
+                "id": line.id,
+                "inventory_item_id": line.inventory_item_id,
+                "sku": line.sku or "",
+                "description": line.description,
+                "quantity": round(float(line.quantity or 0), 2),
+                "unit_cost": round(float(line.unit_cost or 0), 2),
+                "received_quantity": round(float(line.received_quantity or 0), 2),
+            }
+            for line in lines
+        ],
+        "ordered_total": round(sum(float(line.quantity or 0) * float(line.unit_cost or 0) for line in lines), 2),
+        "received_total": round(sum(float(line.received_quantity or 0) * float(line.unit_cost or 0) for line in lines), 2),
+    }
+
+
+def serialize_inventory_movement(movement):
+    item = db.session.get(InventoryItem, movement.inventory_item_id)
+    return {
+        "id": movement.id,
+        "inventory_item_id": movement.inventory_item_id,
+        "sku": item.sku if item else "",
+        "item_name": item.name if item else "",
+        "project_id": movement.project_id,
+        "movement_type": movement.movement_type,
+        "quantity_delta": round(float(movement.quantity_delta or 0), 2),
+        "unit_cost": round(float(movement.unit_cost or 0), 2),
+        "reference": movement.reference or "",
+        "occurred_at": movement.occurred_at.isoformat() if movement.occurred_at else None,
+    }
+
+
+def build_inventory_summary(company):
+    items = InventoryItem.query.filter_by(company_id=company.id).order_by(InventoryItem.name.asc()).all()
+    purchase_orders = PurchaseOrder.query.filter_by(company_id=company.id).order_by(PurchaseOrder.id.desc()).limit(12).all()
+    movements = InventoryMovement.query.filter_by(company_id=company.id).order_by(InventoryMovement.id.desc()).limit(20).all()
+    return {
+        "item_count": len(items),
+        "inventory_value": round(sum(float(item.quantity_on_hand or 0) * float(item.unit_cost or 0) for item in items), 2),
+        "low_stock_count": sum(1 for item in items if float(item.quantity_on_hand or 0) <= float(item.reorder_point or 0)),
+        "open_purchase_orders": sum(1 for po in purchase_orders if po.status in {"draft", "ordered", "partial"}),
+        "reorder_items": [serialize_inventory_item(item) for item in items if float(item.quantity_on_hand or 0) <= float(item.reorder_point or 0)],
+        "items": [serialize_inventory_item(item) for item in items[:20]],
+        "purchase_orders": [serialize_purchase_order(po) for po in purchase_orders],
+        "movements": [serialize_inventory_movement(movement) for movement in movements],
+    }
+
+
+def receive_purchase_order_items(company, user, purchase_order, receipt_lines):
+    if purchase_order.status not in {"ordered", "partial"}:
+        raise ValueError("purchase order must be ordered before receiving")
+
+    normalized_receipts = {}
+    for raw_line in receipt_lines or []:
+        line_id = raw_line.get("line_id")
+        if line_id is None:
+            continue
+        normalized_receipts[int(line_id)] = parse_money(raw_line.get("quantity", 0), f"receipt quantity for line {line_id}")
+
+    if not normalized_receipts:
+        raise ValueError("receipt requires at least one line quantity")
+
+    lines = purchase_order_lines_for(purchase_order.id)
+    received_any = False
+    total_receipt_value = 0.0
+    for line in lines:
+        receipt_quantity = normalized_receipts.get(line.id, 0.0)
+        if receipt_quantity <= 0:
+            continue
+        outstanding = round(float(line.quantity or 0) - float(line.received_quantity or 0), 2)
+        if receipt_quantity - outstanding > 0.01:
+            raise ValueError("receipt quantity exceeds outstanding quantity")
+        line.received_quantity = round(float(line.received_quantity or 0) + receipt_quantity, 2)
+        received_any = True
+        total_receipt_value += round(receipt_quantity * float(line.unit_cost or 0), 2)
+
+        item = db.session.get(InventoryItem, line.inventory_item_id) if line.inventory_item_id else InventoryItem.query.filter_by(company_id=company.id, sku=line.sku).first()
+        if item:
+            item.quantity_on_hand = round(float(item.quantity_on_hand or 0) + receipt_quantity, 2)
+            db.session.add(
+                InventoryMovement(
+                    org_id=company.org_id,
+                    company_id=company.id,
+                    inventory_item_id=item.id,
+                    movement_type="purchase_receipt",
+                    quantity_delta=receipt_quantity,
+                    unit_cost=float(line.unit_cost or 0),
+                    reference=purchase_order.po_number,
+                )
+            )
+
+    if not received_any:
+        raise ValueError("no receipt quantity greater than zero was provided")
+
+    all_received = all(round(float(line.received_quantity or 0), 2) >= round(float(line.quantity or 0), 2) for line in lines)
+    purchase_order.status = "received" if all_received else "partial"
+
+    post_operational_entry(
+        company,
+        user,
+        source_type="purchase_order_receipt",
+        source_id=purchase_order.id,
+        memo=f"Inventory receipt for {purchase_order.po_number}",
+        lines=[
+            {"account_code": "1200", "debit": total_receipt_value, "credit": 0, "description": purchase_order.vendor_name},
+            {"account_code": "2000", "debit": 0, "credit": total_receipt_value, "description": purchase_order.vendor_name},
+        ],
+        entry_date=today_utc_date(),
+        reference=purchase_order.po_number,
+    )
+
+
+def serialize_project(project):
+    return {
+        "id": project.id,
+        "project_code": project.project_code,
+        "name": project.name,
+        "customer_name": project.customer_name or "",
+        "status": project.status,
+        "budget_revenue": round(float(project.budget_revenue or 0), 2),
+        "budget_cost": round(float(project.budget_cost or 0), 2),
+        "notes": project.notes or "",
+    }
+
+
+def serialize_project_cost_entry(entry):
+    return {
+        "id": entry.id,
+        "project_id": entry.project_id,
+        "entry_type": entry.entry_type,
+        "description": entry.description,
+        "amount": round(float(entry.amount or 0), 2),
+        "reference": entry.reference or "",
+        "work_date": iso_date(entry.work_date),
+    }
+
+
+def build_project_summary(company):
+    projects = Project.query.filter_by(company_id=company.id).order_by(Project.updated_at.desc(), Project.id.desc()).all()
+    items = []
+    total_revenue = 0.0
+    total_cost = 0.0
+    for project in projects:
+        manual_entries = ProjectCostEntry.query.filter_by(project_id=project.id).all()
+        time_entries = TimeEntry.query.filter_by(company_id=company.id, project_id=project.id).all()
+        mileage_entries = MileageEntry.query.filter_by(company_id=company.id, project_id=project.id).all()
+        inventory_movements = InventoryMovement.query.filter_by(company_id=company.id, project_id=project.id).all()
+
+        manual_revenue = sum(float(entry.amount or 0) for entry in manual_entries if entry.entry_type == "revenue")
+        manual_cost = sum(float(entry.amount or 0) for entry in manual_entries if entry.entry_type != "revenue")
+        time_revenue = sum(float(entry.hours or 0) * float(entry.billable_rate or 0) for entry in time_entries)
+        time_cost = sum(float(entry.hours or 0) * float(entry.hourly_cost or 0) for entry in time_entries)
+        mileage_cost = sum(float(entry.miles or 0) * float(entry.rate_per_mile or 0) for entry in mileage_entries)
+        inventory_cost = sum(abs(float(entry.quantity_delta or 0)) * float(entry.unit_cost or 0) for entry in inventory_movements if float(entry.quantity_delta or 0) < 0)
+        actual_revenue = round(manual_revenue + time_revenue, 2)
+        actual_cost = round(manual_cost + time_cost + mileage_cost + inventory_cost, 2)
+        margin = round(actual_revenue - actual_cost, 2)
+        total_revenue += actual_revenue
+        total_cost += actual_cost
+        items.append(
+            {
+                **serialize_project(project),
+                "actual_revenue": actual_revenue,
+                "actual_cost": actual_cost,
+                "margin": margin,
+                "budget_delta_revenue": round(actual_revenue - float(project.budget_revenue or 0), 2),
+                "budget_delta_cost": round(actual_cost - float(project.budget_cost or 0), 2),
+            }
+        )
+
+    return {
+        "items": items,
+        "total_revenue": round(total_revenue, 2),
+        "total_cost": round(total_cost, 2),
+        "total_margin": round(total_revenue - total_cost, 2),
+    }
+
+
+def serialize_integration_connection(connection):
+    payload = {}
+    try:
+        payload = json.loads(connection.config_json or "{}")
+    except (TypeError, ValueError):
+        payload = {}
+    return {
+        "id": connection.id,
+        "provider": connection.provider,
+        "category": connection.category,
+        "status": connection.status,
+        "config": payload,
+        "last_synced_at": connection.last_synced_at.isoformat() if connection.last_synced_at else None,
+    }
+
+
+def seed_integration_connections(company):
+    created = 0
+    for item in INTEGRATION_CATALOG:
+        existing = IntegrationConnection.query.filter_by(company_id=company.id, provider=item["provider"]).first()
+        if existing:
+            continue
+        db.session.add(
+            IntegrationConnection(
+                org_id=company.org_id,
+                company_id=company.id,
+                provider=item["provider"],
+                category=item["category"],
+                status="available",
+                config_json=json.dumps({"description": item["description"]}),
+            )
+        )
+        created += 1
+    if created:
+        db.session.flush()
+    return created
+
+
+def build_accountant_toolkit(company):
+    trial_balance = build_trial_balance(company)
+    projects = build_project_summary(company)
+    inventory = build_inventory_summary(company)
+    workforce = build_workforce_overview(company)
+    finance = calculate_finance_summary(company)
+    tax = calculate_tax_summary(company)
+    return {
+        "trial_balance": trial_balance,
+        "projects": projects,
+        "inventory": {
+            "inventory_value": inventory["inventory_value"],
+            "low_stock_count": inventory["low_stock_count"],
+            "open_purchase_orders": inventory["open_purchase_orders"],
+        },
+        "workforce": workforce,
+        "receivables": finance["open_receivables"],
+        "payables": finance["open_payables"],
+        "tax_due": tax["net_tax_due"],
+    }
+
+
+def sync_plaid_connection(connection):
+    cursor = connection.sync_cursor
+    has_more = True
+    total_added = 0
+    total_modified = 0
+    total_removed = 0
+
+    while has_more:
+        response = call_plaid(
+            "/transactions/sync",
+            {
+                "access_token": connection.access_token,
+                "cursor": cursor,
+            },
+        )
+
+        for transaction in response.get("added", []):
+            plaid_transaction_id = transaction.get("transaction_id")
+            if not plaid_transaction_id:
+                continue
+
+            posted_at = parse_iso_date(transaction.get("date"), "date", today_utc_date())
+            raw_amount = round(float(transaction.get("amount") or 0), 2)
+            amount = round(-raw_amount, 2)
+            existing = BankFeedTransaction.query.filter_by(
+                org_id=connection.org_id,
+                company_id=connection.company_id,
+                reference=f"plaid:{plaid_transaction_id}",
+            ).first()
+            description = (
+                transaction.get("merchant_name")
+                or transaction.get("name")
+                or transaction.get("authorized_description")
+                or "Plaid transaction"
+            )
+
+            if existing:
+                existing.posted_at = posted_at
+                existing.description = description
+                existing.amount = amount
+                existing.raw_payload = json.dumps(transaction)
+            else:
+                db.session.add(
+                    BankFeedTransaction(
+                        org_id=connection.org_id,
+                        company_id=connection.company_id,
+                        posted_at=posted_at,
+                        description=description,
+                        amount=amount,
+                        reference=f"plaid:{plaid_transaction_id}",
+                        raw_payload=json.dumps(transaction),
+                    )
+                )
+                total_added += 1
+
+        for transaction in response.get("modified", []):
+            plaid_transaction_id = transaction.get("transaction_id")
+            if not plaid_transaction_id:
+                continue
+            existing = BankFeedTransaction.query.filter_by(
+                org_id=connection.org_id,
+                company_id=connection.company_id,
+                reference=f"plaid:{plaid_transaction_id}",
+            ).first()
+            if not existing:
+                continue
+            existing.posted_at = parse_iso_date(transaction.get("date"), "date", existing.posted_at)
+            existing.description = (
+                transaction.get("merchant_name")
+                or transaction.get("name")
+                or transaction.get("authorized_description")
+                or existing.description
+            )
+            existing.amount = round(-float(transaction.get("amount") or 0), 2)
+            existing.raw_payload = json.dumps(transaction)
+            total_modified += 1
+
+        for removed in response.get("removed", []):
+            plaid_transaction_id = removed.get("transaction_id")
+            if not plaid_transaction_id:
+                continue
+            existing = BankFeedTransaction.query.filter_by(
+                org_id=connection.org_id,
+                company_id=connection.company_id,
+                reference=f"plaid:{plaid_transaction_id}",
+            ).first()
+            if existing:
+                db.session.delete(existing)
+                total_removed += 1
+
+        cursor = response.get("next_cursor")
+        has_more = bool(response.get("has_more"))
+
+    connection.sync_cursor = cursor or connection.sync_cursor
+    connection.status = "connected"
+    connection.updated_at = datetime.datetime.now(datetime.UTC)
+
+    if not safe_commit():
+        raise ValueError("database error while syncing Plaid transactions")
+
+    return {
+        "added": total_added,
+        "modified": total_modified,
+        "removed": total_removed,
+        "cursor": connection.sync_cursor,
+    }
 
 
 def maintenance_state():
@@ -674,7 +3194,9 @@ def analyze():
             df = normalize_ledger_dataframe(df)
         result = calc(df)
     except Exception as exc:
-        return error_response(f"invalid file: {exc}")
+        suffix = Path((uploaded_file.filename or "").lower()).suffix
+        label = "csv" if suffix in {".csv", ".txt"} else "file"
+        return error_response(f"invalid {label}: {exc}")
 
     org.usage += 1
     db.session.add(Report(org_id=org.id, company_id=company.id, data=json.dumps(result)))
@@ -706,7 +3228,9 @@ def extract_ledger():
         normalized_df = normalize_ledger_dataframe(raw_df)
         summary = calc(normalized_df)
     except Exception as exc:
-        return error_response(f"invalid file: {exc}")
+        suffix = Path((uploaded_file.filename or "").lower()).suffix
+        label = "csv" if suffix in {".csv", ".txt"} else "file"
+        return error_response(f"invalid {label}: {exc}")
 
     ledger_rows = []
     for idx, row in enumerate(normalized_df.to_dict(orient="records"), start=1):
@@ -767,6 +3291,9 @@ def create_company():
 
     company = Company(org_id=user.org_id, name=name, business_type=business_type)
     db.session.add(company)
+    db.session.flush()
+    seed_chart_of_accounts(company)
+    seed_integration_connections(company)
     if not safe_commit():
         return error_response("database error while creating company", 503)
 
@@ -776,6 +3303,2195 @@ def create_company():
         "name": company.name,
         "business_type": company.business_type,
     }, 201
+
+
+# ---------------- FINANCE OPS ----------------
+
+@app.route("/finance/summary")
+@jwt_required()
+def finance_summary():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    summary = calculate_finance_summary(company)
+    summary["company_id"] = company.id
+    return summary
+
+
+@app.route("/finance/invoices")
+@jwt_required()
+def list_invoices():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    invoices, _ = refresh_finance_documents(company.id)
+    scoped = [invoice for invoice in invoices if invoice.org_id == user.org_id]
+    scoped.sort(key=lambda invoice: (invoice.issue_date or today_utc_date(), invoice.id), reverse=True)
+    return {"items": [serialize_invoice(invoice) for invoice in scoped]}
+
+
+@app.route("/finance/invoices", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant", "cashier")
+def create_invoice():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    customer_name = (data.get("customer_name") or "").strip()
+    customer_email = (data.get("customer_email") or "").strip().lower() or None
+    if not customer_name:
+        return error_response("customer_name is required")
+
+    try:
+        issue_date = parse_iso_date(data.get("issue_date"), "issue_date", today_utc_date())
+        due_date = parse_iso_date(data.get("due_date"), "due_date", issue_date + datetime.timedelta(days=14))
+        tax_rate = parse_money(data.get("tax_rate", 0), "tax_rate")
+        items, subtotal = normalize_document_items(data.get("items"), "invoice")
+    except ValueError as exc:
+        return error_response(str(exc))
+
+    requested_status = (data.get("status") or "draft").strip().lower()
+    if requested_status not in {"draft", "sent"}:
+        return error_response("invoice status must be draft or sent")
+
+    tax_amount = round(subtotal * (tax_rate / 100), 2)
+    total_amount = round(subtotal + tax_amount, 2)
+    invoice = Invoice(
+        org_id=user.org_id,
+        company_id=company.id,
+        invoice_number=generate_document_number(Invoice, company.id, "INV"),
+        customer_name=customer_name,
+        customer_email=customer_email,
+        status=requested_status,
+        issue_date=issue_date,
+        due_date=due_date,
+        subtotal=subtotal,
+        tax_rate=tax_rate,
+        tax_amount=tax_amount,
+        total_amount=total_amount,
+        balance_due=total_amount,
+        notes=(data.get("notes") or "").strip() or None,
+        created_by=user.id,
+        last_sent_at=datetime.datetime.now(datetime.UTC) if requested_status == "sent" else None,
+    )
+    db.session.add(invoice)
+    db.session.flush()
+
+    for item in items:
+        db.session.add(
+            InvoiceItem(
+                invoice_id=invoice.id,
+                description=item["description"],
+                quantity=item["quantity"],
+                unit_price=item["unit_price"],
+                amount=item["amount"],
+            )
+        )
+
+    refresh_invoice_status(invoice)
+    if requested_status == "sent":
+        journal_lines = [
+            {"account_code": "1100", "debit": total_amount, "credit": 0, "description": customer_name},
+            {"account_code": "4000", "debit": 0, "credit": subtotal, "description": customer_name},
+        ]
+        if tax_amount > 0:
+            journal_lines.append({"account_code": "2100", "debit": 0, "credit": tax_amount, "description": customer_name})
+        post_operational_entry(
+            company,
+            user,
+            source_type="invoice_issue",
+            source_id=invoice.id,
+            memo=f"Invoice {invoice.invoice_number} issued",
+            lines=journal_lines,
+            entry_date=issue_date,
+            reference=invoice.invoice_number,
+        )
+    if not safe_commit():
+        return error_response("database error while creating invoice", 503)
+
+    log(user.id, f"created invoice {invoice.invoice_number}")
+    return serialize_invoice(invoice), 201
+
+
+@app.route("/finance/invoices/<int:invoice_id>/status", methods=["PATCH"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant", "cashier")
+def update_invoice_status(invoice_id):
+    user = get_user_from_token()
+    invoice = get_invoice_for_user(user, invoice_id)
+    if not invoice:
+        return error_response("invoice not found", 404)
+
+    data = request.get_json(silent=True) or {}
+    next_status = (data.get("status") or "").strip().lower()
+    if next_status not in {"draft", "sent", "cancelled"}:
+        return error_response("invalid invoice status")
+    if next_status == "cancelled" and total_customer_payments(invoice.id) > 0:
+        return error_response("cannot cancel an invoice that has payments")
+
+    previous_status = invoice.status
+    invoice.status = next_status
+    if next_status == "sent":
+        invoice.last_sent_at = datetime.datetime.now(datetime.UTC)
+        if previous_status == "draft":
+            journal_lines = [
+                {"account_code": "1100", "debit": float(invoice.total_amount or 0), "credit": 0, "description": invoice.customer_name},
+                {"account_code": "4000", "debit": 0, "credit": float(invoice.subtotal or 0), "description": invoice.customer_name},
+            ]
+            if float(invoice.tax_amount or 0) > 0:
+                journal_lines.append({"account_code": "2100", "debit": 0, "credit": float(invoice.tax_amount or 0), "description": invoice.customer_name})
+            post_operational_entry(
+                resolve_company_for_user(user, invoice.company_id),
+                user,
+                source_type="invoice_issue",
+                source_id=invoice.id,
+                memo=f"Invoice {invoice.invoice_number} issued",
+                lines=journal_lines,
+                entry_date=invoice.issue_date or today_utc_date(),
+                reference=invoice.invoice_number,
+            )
+    elif next_status == "cancelled" and previous_status in {"sent", "partial", "overdue"}:
+        company = resolve_company_for_user(user, invoice.company_id)
+        reverse_source_entries(company, user, "invoice_issue", invoice.id, f"Invoice {invoice.invoice_number} cancelled")
+    if not safe_commit():
+        return error_response("database error while updating invoice status", 503)
+
+    refresh_invoice_status(invoice)
+    safe_commit()
+    log(user.id, f"updated invoice {invoice.invoice_number} to {next_status}")
+    return serialize_invoice(invoice)
+
+
+@app.route("/finance/invoices/<int:invoice_id>/payments", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant", "cashier")
+def create_invoice_payment(invoice_id):
+    user = get_user_from_token()
+    invoice = get_invoice_for_user(user, invoice_id)
+    if not invoice:
+        return error_response("invoice not found", 404)
+
+    data = request.get_json(silent=True) or {}
+    try:
+        refresh_invoice_status(invoice)
+        amount = parse_money(data.get("amount", invoice.balance_due), "amount")
+        payment_date = parse_iso_date(data.get("payment_date"), "payment_date", today_utc_date())
+        apply_customer_payment(
+            invoice,
+            amount=amount,
+            payment_date=payment_date,
+            reference=data.get("reference") or "",
+            notes=data.get("notes") or "",
+        )
+        payment_record = CustomerPayment.query.filter_by(invoice_id=invoice.id).order_by(CustomerPayment.id.desc()).first()
+        company = resolve_company_for_user(user, invoice.company_id)
+        post_operational_entry(
+            company,
+            user,
+            source_type="invoice_payment",
+            source_id=payment_record.id if payment_record else None,
+            memo=f"Payment received for {invoice.invoice_number}",
+            lines=[
+                {"account_code": "1000", "debit": amount, "credit": 0, "description": invoice.customer_name},
+                {"account_code": "1100", "debit": 0, "credit": amount, "description": invoice.customer_name},
+            ],
+            entry_date=payment_date,
+            reference=invoice.invoice_number,
+        )
+    except ValueError as exc:
+        db.session.rollback()
+        return error_response(str(exc))
+
+    if not safe_commit():
+        return error_response("database error while recording payment", 503)
+
+    log(user.id, f"recorded payment on {invoice.invoice_number}")
+    return serialize_invoice(invoice)
+
+
+@app.route("/finance/receivables")
+@jwt_required()
+def receivables_summary():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    invoices, _ = refresh_finance_documents(company.id)
+    scoped = [invoice for invoice in invoices if invoice.org_id == user.org_id]
+    return calculate_aging(scoped, "invoice_number")
+
+
+@app.route("/finance/bills")
+@jwt_required()
+def list_bills():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    _, bills = refresh_finance_documents(company.id)
+    scoped = [bill for bill in bills if bill.org_id == user.org_id]
+    scoped.sort(key=lambda bill: (bill.issue_date or today_utc_date(), bill.id), reverse=True)
+    return {"items": [serialize_bill(bill) for bill in scoped]}
+
+
+@app.route("/finance/bills", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def create_bill():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    vendor_name = (data.get("vendor_name") or "").strip()
+    if not vendor_name:
+        return error_response("vendor_name is required")
+
+    try:
+        issue_date = parse_iso_date(data.get("issue_date"), "issue_date", today_utc_date())
+        due_date = parse_iso_date(data.get("due_date"), "due_date", issue_date + datetime.timedelta(days=30))
+        tax_rate = parse_money(data.get("tax_rate", 0), "tax_rate")
+        items, subtotal = normalize_document_items(data.get("items"), "bill")
+    except ValueError as exc:
+        return error_response(str(exc))
+
+    requested_status = (data.get("status") or "draft").strip().lower()
+    if requested_status not in {"draft", "approved"}:
+        return error_response("bill status must be draft or approved")
+
+    tax_amount = round(subtotal * (tax_rate / 100), 2)
+    total_amount = round(subtotal + tax_amount, 2)
+    get_or_create_vendor_profile(
+        company,
+        vendor_name,
+        {
+            "email": data.get("vendor_email"),
+            "tax_id": data.get("vendor_tax_id"),
+            "default_payment_rail": data.get("default_payment_rail"),
+            "is_1099_eligible": data.get("is_1099_eligible"),
+            "tax_form_type": data.get("tax_form_type"),
+            "tin_status": data.get("tin_status"),
+        },
+    )
+    bill = VendorBill(
+        org_id=user.org_id,
+        company_id=company.id,
+        bill_number=generate_document_number(VendorBill, company.id, "BILL"),
+        vendor_name=vendor_name,
+        status=requested_status,
+        issue_date=issue_date,
+        due_date=due_date,
+        subtotal=subtotal,
+        tax_rate=tax_rate,
+        tax_amount=tax_amount,
+        total_amount=total_amount,
+        balance_due=total_amount,
+        notes=(data.get("notes") or "").strip() or None,
+        created_by=user.id,
+        approved_at=datetime.datetime.now(datetime.UTC) if requested_status == "approved" else None,
+    )
+    db.session.add(bill)
+    db.session.flush()
+
+    for item in items:
+        db.session.add(
+            VendorBillItem(
+                bill_id=bill.id,
+                description=item["description"],
+                quantity=item["quantity"],
+                unit_price=item["unit_price"],
+                amount=item["amount"],
+            )
+        )
+
+    refresh_bill_status(bill)
+    if requested_status == "approved":
+        journal_lines = [
+            {"account_code": "5200", "debit": subtotal, "credit": 0, "description": vendor_name},
+            {"account_code": "2000", "debit": 0, "credit": total_amount, "description": vendor_name},
+        ]
+        if tax_amount > 0:
+            journal_lines.insert(1, {"account_code": "1250", "debit": tax_amount, "credit": 0, "description": vendor_name})
+        post_operational_entry(
+            company,
+            user,
+            source_type="bill_issue",
+            source_id=bill.id,
+            memo=f"Vendor bill {bill.bill_number} approved",
+            lines=journal_lines,
+            entry_date=issue_date,
+            reference=bill.bill_number,
+        )
+    if not safe_commit():
+        return error_response("database error while creating bill", 503)
+
+    log(user.id, f"created bill {bill.bill_number}")
+    return serialize_bill(bill), 201
+
+
+@app.route("/finance/bills/<int:bill_id>/status", methods=["PATCH"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def update_bill_status(bill_id):
+    user = get_user_from_token()
+    bill = get_bill_for_user(user, bill_id)
+    if not bill:
+        return error_response("bill not found", 404)
+
+    data = request.get_json(silent=True) or {}
+    next_status = (data.get("status") or "").strip().lower()
+    if next_status not in {"draft", "approved", "cancelled"}:
+        return error_response("invalid bill status")
+    if next_status == "cancelled" and total_vendor_payments(bill.id) > 0:
+        return error_response("cannot cancel a bill that has payments")
+
+    previous_status = bill.status
+    bill.status = next_status
+    if next_status == "approved":
+        bill.approved_at = datetime.datetime.now(datetime.UTC)
+        if previous_status == "draft":
+            company = resolve_company_for_user(user, bill.company_id)
+            journal_lines = [
+                {"account_code": "5200", "debit": float(bill.subtotal or 0), "credit": 0, "description": bill.vendor_name},
+                {"account_code": "2000", "debit": 0, "credit": float(bill.total_amount or 0), "description": bill.vendor_name},
+            ]
+            if float(bill.tax_amount or 0) > 0:
+                journal_lines.insert(1, {"account_code": "1250", "debit": float(bill.tax_amount or 0), "credit": 0, "description": bill.vendor_name})
+            post_operational_entry(
+                company,
+                user,
+                source_type="bill_issue",
+                source_id=bill.id,
+                memo=f"Vendor bill {bill.bill_number} approved",
+                lines=journal_lines,
+                entry_date=bill.issue_date or today_utc_date(),
+                reference=bill.bill_number,
+            )
+    elif next_status == "cancelled" and previous_status in {"approved", "partial", "overdue"}:
+        company = resolve_company_for_user(user, bill.company_id)
+        reverse_source_entries(company, user, "bill_issue", bill.id, f"Vendor bill {bill.bill_number} cancelled")
+    if not safe_commit():
+        return error_response("database error while updating bill status", 503)
+
+    refresh_bill_status(bill)
+    safe_commit()
+    log(user.id, f"updated bill {bill.bill_number} to {next_status}")
+    return serialize_bill(bill)
+
+
+@app.route("/finance/bills/<int:bill_id>/payments", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def create_bill_payment(bill_id):
+    user = get_user_from_token()
+    bill = get_bill_for_user(user, bill_id)
+    if not bill:
+        return error_response("bill not found", 404)
+
+    data = request.get_json(silent=True) or {}
+    try:
+        refresh_bill_status(bill)
+        amount = parse_money(data.get("amount", bill.balance_due), "amount")
+        payment_date = parse_iso_date(data.get("payment_date"), "payment_date", today_utc_date())
+        apply_vendor_payment(
+            bill,
+            amount=amount,
+            payment_date=payment_date,
+            reference=data.get("reference") or "",
+            notes=data.get("notes") or "",
+        )
+        payment_record = VendorPayment.query.filter_by(bill_id=bill.id).order_by(VendorPayment.id.desc()).first()
+        company = resolve_company_for_user(user, bill.company_id)
+        post_operational_entry(
+            company,
+            user,
+            source_type="bill_payment",
+            source_id=payment_record.id if payment_record else None,
+            memo=f"Payment sent for {bill.bill_number}",
+            lines=[
+                {"account_code": "2000", "debit": amount, "credit": 0, "description": bill.vendor_name},
+                {"account_code": "1000", "debit": 0, "credit": amount, "description": bill.vendor_name},
+            ],
+            entry_date=payment_date,
+            reference=bill.bill_number,
+        )
+    except ValueError as exc:
+        db.session.rollback()
+        return error_response(str(exc))
+
+    if not safe_commit():
+        return error_response("database error while recording bill payment", 503)
+
+    log(user.id, f"recorded payment on {bill.bill_number}")
+    return serialize_bill(bill)
+
+
+@app.route("/finance/payables")
+@jwt_required()
+def payables_summary():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    _, bills = refresh_finance_documents(company.id)
+    scoped = [bill for bill in bills if bill.org_id == user.org_id]
+    return calculate_aging(scoped, "bill_number")
+
+
+@app.route("/finance/bank-transactions")
+@jwt_required()
+def list_bank_transactions():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    transactions = (
+        BankFeedTransaction.query.filter_by(org_id=user.org_id, company_id=company.id)
+        .order_by(BankFeedTransaction.posted_at.desc(), BankFeedTransaction.id.desc())
+        .limit(100)
+        .all()
+    )
+    return {"items": [serialize_bank_transaction(transaction) for transaction in transactions]}
+
+
+@app.route("/finance/banking/providers")
+@jwt_required()
+def banking_providers():
+    return {
+        "plaid": {
+            "enabled": plaid_enabled(),
+            "environment": (os.getenv("PLAID_ENV", "sandbox") or "sandbox").strip().lower(),
+            "products": plaid_products(),
+            "country_codes": plaid_country_codes(),
+        }
+    }
+
+
+@app.route("/finance/banking/connections")
+@jwt_required()
+def banking_connections():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    rows = (
+        BankConnection.query.filter_by(org_id=user.org_id, company_id=company.id)
+        .order_by(BankConnection.created_at.desc(), BankConnection.id.desc())
+        .all()
+    )
+    return {"items": [serialize_bank_connection(row) for row in rows]}
+
+
+@app.route("/finance/banking/plaid/link-token", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def create_plaid_link_token():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    try:
+        response = call_plaid(
+            "/link/token/create",
+            {
+                "client_name": "FinancePro",
+                "language": "en",
+                "country_codes": plaid_country_codes(),
+                "products": plaid_products(),
+                "user": {"client_user_id": f"{user.org_id}:{user.id}:{company.id}"},
+                "transactions": {"days_requested": 730},
+                **({"webhook": os.getenv("PLAID_WEBHOOK_URL")} if os.getenv("PLAID_WEBHOOK_URL") else {}),
+            },
+        )
+    except ValueError as exc:
+        return error_response(str(exc), 503)
+
+    return {"link_token": response.get("link_token")}
+
+
+@app.route("/finance/banking/plaid/exchange-token", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def exchange_plaid_public_token():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    public_token = (data.get("public_token") or "").strip()
+    if not public_token:
+        return error_response("public_token is required")
+
+    try:
+        exchange = call_plaid(
+            "/item/public_token/exchange",
+            {
+                "public_token": public_token,
+            },
+        )
+    except ValueError as exc:
+        return error_response(str(exc), 503)
+
+    item_id = exchange.get("item_id")
+    access_token = exchange.get("access_token")
+    if not item_id or not access_token:
+        return error_response("Plaid did not return an item_id or access_token", 503)
+
+    existing = BankConnection.query.filter_by(item_id=item_id).first()
+    if existing:
+        existing.company_id = company.id
+        existing.org_id = user.org_id
+        existing.access_token = access_token
+        existing.institution_name = (data.get("institution_name") or existing.institution_name or "").strip() or None
+        existing.status = "connected"
+        existing.updated_at = datetime.datetime.now(datetime.UTC)
+        connection = existing
+    else:
+        connection = BankConnection(
+            org_id=user.org_id,
+            company_id=company.id,
+            provider="plaid",
+            item_id=item_id,
+            access_token=access_token,
+            institution_name=(data.get("institution_name") or "").strip() or None,
+            status="connected",
+        )
+        db.session.add(connection)
+
+    if not safe_commit():
+        return error_response("database error while saving bank connection", 503)
+
+    log(user.id, f"connected bank feed for company {company.name} via Plaid")
+    return serialize_bank_connection(connection), 201
+
+
+@app.route("/finance/banking/plaid/sync", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def sync_plaid_transactions():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    connection_id = data.get("connection_id")
+    query = BankConnection.query.filter_by(org_id=user.org_id, company_id=company.id, provider="plaid")
+    connection = query.filter_by(id=connection_id).first() if connection_id else query.order_by(BankConnection.id.desc()).first()
+    if not connection:
+        return error_response("no Plaid bank connection found for this company", 404)
+
+    try:
+        result = sync_plaid_connection(connection)
+    except ValueError as exc:
+        return error_response(str(exc), 503)
+
+    log(user.id, f"synced Plaid transactions for {company.name}")
+    return {
+        "connection": serialize_bank_connection(connection),
+        **result,
+    }
+
+
+@app.route("/finance/bank-feed/import", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def import_bank_feed():
+    user = get_user_from_token()
+    company = resolve_company_for_user(user, request.form.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    uploaded_file = request.files.get("file")
+    if not uploaded_file:
+        return error_response("file is required")
+
+    try:
+        raw_df = read_external_dataframe(uploaded_file)
+        normalized_df = normalize_bank_feed_dataframe(raw_df)
+    except Exception as exc:
+        return error_response(f"invalid bank feed: {exc}")
+
+    imported = 0
+    skipped = 0
+    imported_rows = []
+    for row in normalized_df.to_dict(orient="records"):
+        existing = BankFeedTransaction.query.filter_by(
+            org_id=user.org_id,
+            company_id=company.id,
+            posted_at=row["posted_at"],
+            description=str(row["description"]).strip(),
+            amount=round(float(row["amount"] or 0), 2),
+            reference=(str(row.get("reference", "")).strip() or None),
+        ).first()
+        if existing:
+            skipped += 1
+            continue
+
+        transaction = BankFeedTransaction(
+            org_id=user.org_id,
+            company_id=company.id,
+            posted_at=row["posted_at"],
+            description=str(row["description"]).strip(),
+            amount=round(float(row["amount"] or 0), 2),
+            reference=(str(row.get("reference", "")).strip() or None),
+            raw_payload=json.dumps(
+                {
+                    "posted_at": iso_date(row["posted_at"]),
+                    "description": str(row["description"]).strip(),
+                    "amount": round(float(row["amount"] or 0), 2),
+                    "reference": str(row.get("reference", "")).strip(),
+                }
+            ),
+        )
+        db.session.add(transaction)
+        db.session.flush()
+        imported += 1
+        imported_rows.append(serialize_bank_transaction(transaction))
+
+    if not safe_commit():
+        return error_response("database error while importing bank feed", 503)
+
+    log(user.id, f"imported bank feed with {imported} transactions")
+    return {"imported": imported, "skipped": skipped, "items": imported_rows}
+
+
+@app.route("/finance/reconciliation/suggestions")
+@jwt_required()
+def reconciliation_suggestions():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    return {"items": build_reconciliation_suggestions(company)}
+
+
+@app.route("/finance/reconciliation/match", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def reconcile_transaction():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    transaction_id = data.get("transaction_id")
+    entity_type = (data.get("entity_type") or "").strip().lower()
+    entity_id = data.get("entity_id")
+
+    if not transaction_id or not entity_id or entity_type not in {"invoice", "bill"}:
+        return error_response("transaction_id, entity_type, and entity_id are required")
+
+    transaction = get_bank_transaction_for_user(user, int(transaction_id))
+    if not transaction:
+        return error_response("bank transaction not found", 404)
+    if transaction.status not in {"unmatched", "rule_matched"}:
+        return error_response("bank transaction is already matched", 400)
+
+    payment_date = parse_iso_date(data.get("payment_date"), "payment_date", transaction.posted_at or today_utc_date())
+    amount = round(abs(float(transaction.amount or 0)), 2)
+    if amount <= 0:
+        return error_response("bank transaction amount must be non-zero")
+
+    try:
+        if entity_type == "invoice":
+            if float(transaction.amount or 0) < 0:
+                return error_response("outflow transaction cannot be matched to an invoice")
+            invoice = get_invoice_for_user(user, int(entity_id))
+            if not invoice or invoice.company_id != transaction.company_id:
+                return error_response("invoice not found", 404)
+            apply_customer_payment(
+                invoice,
+                amount=amount,
+                payment_date=payment_date,
+                reference=transaction.reference or transaction.description,
+                source="bank_feed",
+                notes="Matched from bank feed reconciliation",
+                bank_transaction_id=transaction.id,
+            )
+            transaction.status = "matched"
+            transaction.matched_invoice_id = invoice.id
+            transaction.matched_bill_id = None
+            matched_payload = serialize_invoice(invoice)
+            log(user.id, f"matched bank transaction {transaction.id} to invoice {invoice.invoice_number}")
+        else:
+            if float(transaction.amount or 0) > 0:
+                return error_response("inflow transaction cannot be matched to a bill")
+            bill = get_bill_for_user(user, int(entity_id))
+            if not bill or bill.company_id != transaction.company_id:
+                return error_response("bill not found", 404)
+            apply_vendor_payment(
+                bill,
+                amount=amount,
+                payment_date=payment_date,
+                reference=transaction.reference or transaction.description,
+                source="bank_feed",
+                notes="Matched from bank feed reconciliation",
+                bank_transaction_id=transaction.id,
+            )
+            transaction.status = "matched"
+            transaction.matched_invoice_id = None
+            transaction.matched_bill_id = bill.id
+            matched_payload = serialize_bill(bill)
+            log(user.id, f"matched bank transaction {transaction.id} to bill {bill.bill_number}")
+    except ValueError as exc:
+        db.session.rollback()
+        return error_response(str(exc))
+
+    if not safe_commit():
+        return error_response("database error while reconciling transaction", 503)
+
+    return {"transaction": serialize_bank_transaction(transaction), "matched": matched_payload}
+
+
+@app.route("/finance/tax/summary")
+@jwt_required()
+def tax_summary():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    profile = get_or_create_tax_profile(company)
+    summary = calculate_tax_summary(company, profile)
+    summary["company_id"] = company.id
+    return summary
+
+
+@app.route("/finance/tax/profile")
+@jwt_required()
+def tax_profile():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    return serialize_tax_profile(get_or_create_tax_profile(company))
+
+
+@app.route("/finance/tax/profile", methods=["PUT"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def update_tax_profile():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    profile = get_or_create_tax_profile(company)
+    jurisdiction_code = (data.get("jurisdiction_code") or profile.jurisdiction_code or "generic").strip().lower()
+    filing_frequency = (data.get("filing_frequency") or profile.filing_frequency or "monthly").strip().lower()
+    if filing_frequency not in VALID_TAX_FILING_FREQUENCIES:
+        return error_response("invalid filing_frequency")
+
+    try:
+        indirect_tax_rate = parse_money(data.get("indirect_tax_rate", profile.indirect_tax_rate), "indirect_tax_rate")
+        income_tax_rate = parse_money(data.get("income_tax_rate", profile.income_tax_rate), "income_tax_rate")
+        period_start_month = int(data.get("period_start_month", profile.period_start_month or 1))
+    except ValueError as exc:
+        return error_response(str(exc))
+
+    if period_start_month < 1 or period_start_month > 12:
+        return error_response("period_start_month must be between 1 and 12")
+
+    profile.jurisdiction_code = jurisdiction_code
+    profile.filing_frequency = filing_frequency
+    profile.registration_number = (data.get("registration_number") or "").strip() or None
+    profile.currency_code = (data.get("currency_code") or profile.currency_code or "USD").strip().upper()
+    profile.sales_tax_name = (data.get("sales_tax_name") or profile.sales_tax_name or "Sales Tax").strip()
+    profile.purchase_tax_name = (data.get("purchase_tax_name") or profile.purchase_tax_name or "Purchase Tax Credit").strip()
+    profile.indirect_tax_rate = indirect_tax_rate
+    profile.income_tax_rate = income_tax_rate
+    profile.period_start_month = period_start_month
+
+    if not safe_commit():
+        return error_response("database error while updating tax profile", 503)
+
+    log(user.id, f"updated tax profile for {company.name}")
+    return serialize_tax_profile(profile)
+
+
+@app.route("/finance/tax/filing-preview")
+@jwt_required()
+def tax_filing_preview():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    profile = get_or_create_tax_profile(company)
+    preview = build_tax_filing_preview(
+        company,
+        profile,
+        period_start=request.args.get("period_start"),
+        period_end=request.args.get("period_end"),
+    )
+    preview["profile"] = serialize_tax_profile(profile)
+    return preview
+
+
+@app.route("/finance/chart-of-accounts")
+@jwt_required()
+def list_chart_of_accounts():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    seed_chart_of_accounts(company)
+    safe_commit()
+    accounts = LedgerAccount.query.filter_by(company_id=company.id).order_by(LedgerAccount.code.asc()).all()
+    return {"items": [serialize_ledger_account(account) for account in accounts]}
+
+
+@app.route("/finance/chart-of-accounts", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def create_chart_of_account():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    code = (data.get("code") or "").strip()
+    name = (data.get("name") or "").strip()
+    category = (data.get("category") or "").strip().lower()
+    normal_balance = (data.get("normal_balance") or ("credit" if category in {"liability", "equity", "revenue"} else "debit")).strip().lower()
+
+    if not code or not name:
+        return error_response("code and name are required")
+    if category not in VALID_ACCOUNT_CATEGORIES:
+        return error_response("invalid account category")
+    if normal_balance not in {"debit", "credit"}:
+        return error_response("normal_balance must be debit or credit")
+    if LedgerAccount.query.filter_by(company_id=company.id, code=code).first():
+        return error_response("account code already exists", 409)
+
+    account = LedgerAccount(
+        org_id=company.org_id,
+        company_id=company.id,
+        code=code,
+        name=name,
+        category=category,
+        subtype=(data.get("subtype") or "").strip() or None,
+        normal_balance=normal_balance,
+        description=(data.get("description") or "").strip() or None,
+        is_system=False,
+        is_active=parse_bool(data.get("is_active"), True),
+    )
+    db.session.add(account)
+    if not safe_commit():
+        return error_response("database error while creating account", 503)
+
+    log(user.id, f"created chart of account {code}")
+    return serialize_ledger_account(account), 201
+
+
+@app.route("/finance/chart-of-accounts/seed", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def seed_chart_of_accounts_route():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    created = seed_chart_of_accounts(company)
+    if not safe_commit():
+        return error_response("database error while seeding chart of accounts", 503)
+
+    log(user.id, f"seeded chart of accounts for {company.name}")
+    return {"created": created}
+
+
+@app.route("/finance/accounting/overview")
+@jwt_required()
+def accounting_overview():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    return build_accounting_overview(company)
+
+
+@app.route("/finance/journal-entries")
+@jwt_required()
+def list_journal_entries():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    entries = (
+        JournalEntry.query.filter_by(company_id=company.id)
+        .order_by(JournalEntry.entry_date.desc(), JournalEntry.id.desc())
+        .limit(50)
+        .all()
+    )
+    return {"items": [serialize_journal_entry(entry) for entry in entries]}
+
+
+@app.route("/finance/journal-entries", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def create_journal_entry_route():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    memo = (data.get("memo") or "").strip()
+    if not memo:
+        return error_response("memo is required")
+
+    try:
+        entry_date = parse_iso_date(data.get("entry_date"), "entry_date", today_utc_date())
+        entry = post_journal_entry(
+            company,
+            user,
+            entry_date=entry_date,
+            memo=memo,
+            lines=data.get("lines"),
+            source_type="manual",
+            source_id=None,
+            reference=data.get("reference"),
+        )
+    except ValueError as exc:
+        db.session.rollback()
+        return error_response(str(exc))
+
+    if not safe_commit():
+        return error_response("database error while posting journal entry", 503)
+
+    log(user.id, f"posted journal entry {entry.entry_number}")
+    return serialize_journal_entry(entry), 201
+
+
+@app.route("/finance/register")
+@jwt_required()
+def account_register():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    seed_chart_of_accounts(company)
+    account = get_company_account(company.id, request.args.get("account_id"), request.args.get("account_code"))
+    if not account:
+        account = LedgerAccount.query.filter_by(company_id=company.id).order_by(LedgerAccount.code.asc()).first()
+    if not account:
+        return error_response("account not found", 404)
+
+    return build_account_register(company, account)
+
+
+@app.route("/finance/vendors")
+@jwt_required()
+def list_vendors():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    vendors = VendorProfile.query.filter_by(company_id=company.id).order_by(VendorProfile.vendor_name.asc()).all()
+    return {"items": [serialize_vendor_profile(vendor) for vendor in vendors]}
+
+
+@app.route("/finance/vendors", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def create_vendor():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    try:
+        vendor = get_or_create_vendor_profile(company, data.get("vendor_name"), data)
+    except ValueError as exc:
+        return error_response(str(exc))
+
+    vendor.email = (data.get("email") or vendor.email or "").strip().lower() or None
+    vendor.tax_id = (data.get("tax_id") or vendor.tax_id or "").strip() or None
+    vendor.default_payment_rail = (data.get("default_payment_rail") or vendor.default_payment_rail or "ach").strip().lower()
+    vendor.remittance_reference = (data.get("remittance_reference") or vendor.remittance_reference or "").strip() or None
+    vendor.bank_last4 = ((data.get("bank_last4") or vendor.bank_last4 or "").strip()[-4:] or None)
+    vendor.is_1099_eligible = parse_bool(data.get("is_1099_eligible"), vendor.is_1099_eligible)
+    vendor.tax_form_type = (data.get("tax_form_type") or vendor.tax_form_type or "1099-NEC").strip().upper()
+    vendor.tin_status = (data.get("tin_status") or vendor.tin_status or "pending").strip().lower()
+
+    if vendor.default_payment_rail not in VALID_PAYMENT_RAILS:
+        return error_response("invalid payment rail")
+
+    if not safe_commit():
+        return error_response("database error while saving vendor", 503)
+
+    log(user.id, f"saved vendor profile {vendor.vendor_name}")
+    return serialize_vendor_profile(vendor), 201
+
+
+@app.route("/finance/vendors/1099-summary")
+@jwt_required()
+def vendor_1099_summary():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    year = request.args.get("year")
+    try:
+        parsed_year = int(year) if year else None
+    except ValueError:
+        return error_response("year must be numeric")
+
+    return build_1099_summary(company, parsed_year)
+
+
+@app.route("/finance/bill-pay/summary")
+@jwt_required()
+def bill_pay_summary():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    return build_bill_pay_summary(company)
+
+
+@app.route("/finance/bill-pay/disbursements", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def create_bill_disbursement():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    bill = get_bill_for_user(user, data.get("bill_id"))
+    if not bill or bill.company_id != company.id:
+        return error_response("bill not found", 404)
+
+    try:
+        refresh_bill_status(bill)
+        amount = parse_money(data.get("amount", bill.balance_due), "amount")
+        scheduled_date = parse_iso_date(data.get("scheduled_date"), "scheduled_date", today_utc_date())
+    except ValueError as exc:
+        return error_response(str(exc))
+
+    if amount <= 0 or amount - float(bill.balance_due or 0) > 0.01:
+        return error_response("scheduled amount must be positive and within the open bill balance")
+
+    vendor = get_or_create_vendor_profile(company, bill.vendor_name, data)
+    rail = (data.get("payment_rail") or vendor.default_payment_rail or "ach").strip().lower()
+    if rail not in VALID_PAYMENT_RAILS:
+        return error_response("invalid payment rail")
+
+    compliance_status = "ready" if (not vendor.is_1099_eligible or vendor.tin_status == "verified" or vendor.tin_status == "received") else "needs_tin_review"
+    disbursement = BillDisbursement(
+        org_id=company.org_id,
+        company_id=company.id,
+        bill_id=bill.id,
+        vendor_profile_id=vendor.id,
+        payment_rail=rail,
+        status="scheduled",
+        scheduled_date=scheduled_date,
+        amount=amount,
+        reference=(data.get("reference") or bill.bill_number).strip(),
+        compliance_status=compliance_status,
+        created_by=user.id,
+    )
+    db.session.add(disbursement)
+    if not safe_commit():
+        return error_response("database error while scheduling disbursement", 503)
+
+    log(user.id, f"scheduled bill pay for {bill.bill_number}")
+    return serialize_disbursement(disbursement), 201
+
+
+@app.route("/finance/bill-pay/disbursements/<int:disbursement_id>/execute", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def execute_bill_disbursement(disbursement_id):
+    user = get_user_from_token()
+    disbursement = BillDisbursement.query.filter_by(id=disbursement_id, org_id=user.org_id).first()
+    if not disbursement:
+        return error_response("disbursement not found", 404)
+    if disbursement.status == "completed":
+        return error_response("disbursement already completed")
+
+    bill = get_bill_for_user(user, disbursement.bill_id)
+    if not bill:
+        return error_response("bill not found", 404)
+
+    try:
+        payment_date = parse_iso_date((request.get_json(silent=True) or {}).get("payment_date"), "payment_date", today_utc_date())
+        apply_vendor_payment(
+            bill,
+            amount=float(disbursement.amount or 0),
+            payment_date=payment_date,
+            reference=disbursement.reference or bill.bill_number,
+            source=f"bill_pay_{disbursement.payment_rail}",
+            notes=f"Executed through {disbursement.payment_rail}",
+        )
+        payment_record = VendorPayment.query.filter_by(bill_id=bill.id).order_by(VendorPayment.id.desc()).first()
+        company = resolve_company_for_user(user, bill.company_id)
+        post_operational_entry(
+            company,
+            user,
+            source_type="bill_payment",
+            source_id=payment_record.id if payment_record else None,
+            memo=f"Payment sent for {bill.bill_number}",
+            lines=[
+                {"account_code": "2000", "debit": float(disbursement.amount or 0), "credit": 0, "description": bill.vendor_name},
+                {"account_code": "1000", "debit": 0, "credit": float(disbursement.amount or 0), "description": bill.vendor_name},
+            ],
+            entry_date=payment_date,
+            reference=bill.bill_number,
+        )
+    except ValueError as exc:
+        db.session.rollback()
+        return error_response(str(exc))
+
+    disbursement.status = "completed"
+    disbursement.processed_at = datetime.datetime.now(datetime.UTC)
+    disbursement.confirmation_code = f"{disbursement.payment_rail.upper()}-{os.urandom(4).hex().upper()}"
+
+    if not safe_commit():
+        return error_response("database error while executing disbursement", 503)
+
+    log(user.id, f"executed bill pay for {bill.bill_number}")
+    return serialize_disbursement(disbursement)
+
+
+@app.route("/finance/reconciliation/rules")
+@jwt_required()
+def list_reconciliation_rules():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    rules = ReconciliationRule.query.filter_by(company_id=company.id).order_by(ReconciliationRule.priority.asc(), ReconciliationRule.id.asc()).all()
+    return {"items": [serialize_reconciliation_rule(rule) for rule in rules]}
+
+
+@app.route("/finance/reconciliation/rules", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def create_reconciliation_rule():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    name = (data.get("name") or "").strip()
+    if not name:
+        return error_response("name is required")
+
+    direction = (data.get("direction") or "any").strip().lower()
+    auto_action = (data.get("auto_action") or "suggest_account").strip().lower()
+    if direction not in VALID_RECONCILIATION_DIRECTIONS:
+        return error_response("invalid direction")
+    if auto_action not in VALID_RECONCILIATION_ACTIONS:
+        return error_response("invalid auto_action")
+
+    rule = ReconciliationRule(
+        org_id=company.org_id,
+        company_id=company.id,
+        name=name,
+        keyword=(data.get("keyword") or "").strip() or None,
+        direction=direction,
+        min_amount=parse_money(data.get("min_amount", 0), "min_amount") if data.get("min_amount") not in {None, ""} else None,
+        max_amount=parse_money(data.get("max_amount", 0), "max_amount") if data.get("max_amount") not in {None, ""} else None,
+        auto_action=auto_action,
+        target_reference=(data.get("target_reference") or "").strip() or None,
+        exception_type=(data.get("exception_type") or "").strip() or None,
+        priority=int(data.get("priority", 100) or 100),
+        is_active=parse_bool(data.get("is_active"), True),
+    )
+    db.session.add(rule)
+    if not safe_commit():
+        return error_response("database error while saving reconciliation rule", 503)
+
+    log(user.id, f"created reconciliation rule {rule.name}")
+    return serialize_reconciliation_rule(rule), 201
+
+
+@app.route("/finance/reconciliation/rules/auto-apply", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def auto_apply_rules_route():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    result = auto_apply_reconciliation_rules(company, user)
+    log(user.id, f"auto-applied reconciliation rules for {company.name}")
+    return result
+
+
+@app.route("/finance/reconciliation/workspace")
+@jwt_required()
+def reconciliation_workspace():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    return build_reconciliation_workspace(company)
+
+
+@app.route("/finance/reconciliation/exceptions", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def create_reconciliation_exception():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    transaction = get_bank_transaction_for_user(user, data.get("transaction_id"))
+    if not transaction or transaction.company_id != company.id:
+        return error_response("bank transaction not found", 404)
+
+    exception_type = (data.get("exception_type") or "").strip().lower()
+    if not exception_type:
+        return error_response("exception_type is required")
+
+    exception = ReconciliationException(
+        org_id=company.org_id,
+        company_id=company.id,
+        bank_transaction_id=transaction.id,
+        exception_type=exception_type,
+        notes=(data.get("notes") or "").strip() or None,
+        status="open",
+        created_by=user.id,
+    )
+    db.session.add(exception)
+    transaction.status = "exception"
+    if not safe_commit():
+        return error_response("database error while creating reconciliation exception", 503)
+
+    log(user.id, f"flagged reconciliation exception on bank transaction {transaction.id}")
+    return serialize_reconciliation_exception(exception), 201
+
+
+@app.route("/finance/reconciliation/exceptions/<int:exception_id>/resolve", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def resolve_reconciliation_exception(exception_id):
+    user = get_user_from_token()
+    exception = ReconciliationException.query.filter_by(id=exception_id, org_id=user.org_id).first()
+    if not exception:
+        return error_response("reconciliation exception not found", 404)
+
+    transaction = get_bank_transaction_for_user(user, exception.bank_transaction_id)
+    exception.status = "resolved"
+    exception.resolved_at = datetime.datetime.now(datetime.UTC)
+    if transaction and transaction.status == "exception":
+        transaction.status = "unmatched"
+    if not safe_commit():
+        return error_response("database error while resolving reconciliation exception", 503)
+
+    log(user.id, f"resolved reconciliation exception {exception_id}")
+    return serialize_reconciliation_exception(exception)
+
+
+@app.route("/finance/tax/jurisdictions")
+@jwt_required()
+def tax_jurisdictions():
+    return {
+        "items": [
+            {"code": code, **payload}
+            for code, payload in TAX_JURISDICTION_LIBRARY.items()
+        ]
+    }
+
+
+@app.route("/finance/tax/filings")
+@jwt_required()
+def list_tax_filings():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    filings = TaxFiling.query.filter_by(company_id=company.id).order_by(TaxFiling.period_end.desc(), TaxFiling.id.desc()).all()
+    return {"items": [serialize_tax_filing(filing) for filing in filings]}
+
+
+@app.route("/finance/tax/filings", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def prepare_tax_filing():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    profile = get_or_create_tax_profile(company)
+    filing_type = (data.get("filing_type") or "indirect_tax").strip().lower()
+    if filing_type not in VALID_TAX_FILING_TYPES:
+        return error_response("invalid filing_type")
+
+    try:
+        package = build_tax_filing_package(
+            company,
+            profile,
+            period_start=data.get("period_start"),
+            period_end=data.get("period_end"),
+        )
+        period_start = parse_iso_date(package["preview"]["period_start"], "period_start")
+        period_end = parse_iso_date(package["preview"]["period_end"], "period_end")
+    except ValueError as exc:
+        return error_response(str(exc))
+
+    filing = TaxFiling(
+        org_id=company.org_id,
+        company_id=company.id,
+        jurisdiction_code=profile.jurisdiction_code,
+        filing_frequency=profile.filing_frequency,
+        filing_type=filing_type,
+        period_start=period_start,
+        period_end=period_end,
+        status="prepared",
+        payload_json=json.dumps(package),
+        prepared_by=user.id,
+    )
+    db.session.add(filing)
+    if not safe_commit():
+        return error_response("database error while preparing tax filing", 503)
+
+    log(user.id, f"prepared tax filing for {company.name}")
+    return serialize_tax_filing(filing), 201
+
+
+@app.route("/finance/tax/filings/<int:filing_id>/submit", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def submit_tax_filing(filing_id):
+    user = get_user_from_token()
+    filing = TaxFiling.query.filter_by(id=filing_id, org_id=user.org_id).first()
+    if not filing:
+        return error_response("tax filing not found", 404)
+
+    filing.status = "submitted"
+    filing.submitted_at = datetime.datetime.now(datetime.UTC)
+    filing.reference = filing.reference or f"TAX-{filing.company_id}-{filing.id}"
+    if not safe_commit():
+        return error_response("database error while submitting tax filing", 503)
+
+    log(user.id, f"submitted tax filing {filing.id}")
+    return serialize_tax_filing(filing)
+
+
+@app.route("/finance/workforce/overview")
+@jwt_required()
+def workforce_overview():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+    return build_workforce_overview(company)
+
+
+@app.route("/finance/workforce/employees")
+@jwt_required()
+def list_employees():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+    rows = EmployeeProfile.query.filter_by(company_id=company.id).order_by(EmployeeProfile.full_name.asc()).all()
+    return {"items": [serialize_employee(row) for row in rows]}
+
+
+@app.route("/finance/workforce/employees", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def create_employee():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    full_name = (data.get("full_name") or "").strip()
+    pay_type = (data.get("pay_type") or "hourly").strip().lower()
+    if not full_name:
+        return error_response("full_name is required")
+    if pay_type not in VALID_PAY_TYPES:
+        return error_response("invalid pay_type")
+
+    try:
+        employee = EmployeeProfile(
+            org_id=company.org_id,
+            company_id=company.id,
+            full_name=full_name,
+            email=(data.get("email") or "").strip().lower() or None,
+            pay_type=pay_type,
+            hourly_rate=parse_money(data.get("hourly_rate", 0), "hourly_rate"),
+            salary_amount=parse_money(data.get("salary_amount", 0), "salary_amount"),
+            withholding_rate=parse_money(data.get("withholding_rate", 0), "withholding_rate"),
+            benefit_rate=parse_money(data.get("benefit_rate", 0), "benefit_rate"),
+            is_active=parse_bool(data.get("is_active"), True),
+        )
+    except ValueError as exc:
+        return error_response(str(exc))
+
+    db.session.add(employee)
+    if not safe_commit():
+        return error_response("database error while creating employee", 503)
+
+    log(user.id, f"created employee {employee.full_name}")
+    return serialize_employee(employee), 201
+
+
+@app.route("/finance/workforce/contractors")
+@jwt_required()
+def list_contractors():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+    rows = ContractorProfile.query.filter_by(company_id=company.id).order_by(ContractorProfile.full_name.asc()).all()
+    return {"items": [serialize_contractor(row) for row in rows]}
+
+
+@app.route("/finance/workforce/contractors", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def create_contractor():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    full_name = (data.get("full_name") or "").strip()
+    if not full_name:
+        return error_response("full_name is required")
+
+    try:
+        contractor = ContractorProfile(
+            org_id=company.org_id,
+            company_id=company.id,
+            full_name=full_name,
+            email=(data.get("email") or "").strip().lower() or None,
+            tax_id=(data.get("tax_id") or "").strip() or None,
+            default_rate=parse_money(data.get("default_rate", 0), "default_rate"),
+            is_1099_eligible=parse_bool(data.get("is_1099_eligible"), True),
+            tax_form_type=(data.get("tax_form_type") or "1099-NEC").strip().upper(),
+            is_active=parse_bool(data.get("is_active"), True),
+        )
+    except ValueError as exc:
+        return error_response(str(exc))
+
+    db.session.add(contractor)
+    if not safe_commit():
+        return error_response("database error while creating contractor", 503)
+
+    log(user.id, f"created contractor {contractor.full_name}")
+    return serialize_contractor(contractor), 201
+
+
+@app.route("/finance/workforce/time")
+@jwt_required()
+def list_time_entries():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+    rows = TimeEntry.query.filter_by(company_id=company.id).order_by(TimeEntry.work_date.desc(), TimeEntry.id.desc()).limit(50).all()
+    return {"items": [serialize_time_entry(row) for row in rows]}
+
+
+@app.route("/finance/workforce/time", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant", "cashier")
+def create_time_entry():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    employee_id = data.get("employee_id")
+    contractor_id = data.get("contractor_id")
+    if not employee_id and not contractor_id:
+        return error_response("employee_id or contractor_id is required")
+
+    try:
+        entry = TimeEntry(
+            org_id=company.org_id,
+            company_id=company.id,
+            employee_id=int(employee_id) if employee_id not in {None, ""} else None,
+            contractor_id=int(contractor_id) if contractor_id not in {None, ""} else None,
+            project_id=int(data.get("project_id")) if data.get("project_id") not in {None, ""} else None,
+            work_date=parse_iso_date(data.get("work_date"), "work_date", today_utc_date()),
+            hours=parse_money(data.get("hours", 0), "hours"),
+            hourly_cost=parse_money(data.get("hourly_cost", 0), "hourly_cost"),
+            billable_rate=parse_money(data.get("billable_rate", 0), "billable_rate"),
+            description=(data.get("description") or "").strip() or None,
+            status=(data.get("status") or "submitted").strip().lower(),
+        )
+    except ValueError as exc:
+        return error_response(str(exc))
+
+    db.session.add(entry)
+    if not safe_commit():
+        return error_response("database error while creating time entry", 503)
+
+    log(user.id, f"logged time entry {entry.id}")
+    return serialize_time_entry(entry), 201
+
+
+@app.route("/finance/workforce/mileage")
+@jwt_required()
+def list_mileage_entries():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+    rows = MileageEntry.query.filter_by(company_id=company.id).order_by(MileageEntry.trip_date.desc(), MileageEntry.id.desc()).limit(50).all()
+    return {"items": [serialize_mileage_entry(row) for row in rows]}
+
+
+@app.route("/finance/workforce/mileage", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant", "cashier")
+def create_mileage_entry():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    employee_id = data.get("employee_id")
+    contractor_id = data.get("contractor_id")
+    if not employee_id and not contractor_id:
+        return error_response("employee_id or contractor_id is required")
+
+    try:
+        entry = MileageEntry(
+            org_id=company.org_id,
+            company_id=company.id,
+            employee_id=int(employee_id) if employee_id not in {None, ""} else None,
+            contractor_id=int(contractor_id) if contractor_id not in {None, ""} else None,
+            project_id=int(data.get("project_id")) if data.get("project_id") not in {None, ""} else None,
+            trip_date=parse_iso_date(data.get("trip_date"), "trip_date", today_utc_date()),
+            miles=parse_money(data.get("miles", 0), "miles"),
+            rate_per_mile=parse_money(data.get("rate_per_mile", 0.725), "rate_per_mile"),
+            purpose=(data.get("purpose") or "").strip() or None,
+            status=(data.get("status") or "submitted").strip().lower(),
+        )
+    except ValueError as exc:
+        return error_response(str(exc))
+
+    db.session.add(entry)
+    if not safe_commit():
+        return error_response("database error while creating mileage entry", 503)
+
+    log(user.id, f"logged mileage entry {entry.id}")
+    return serialize_mileage_entry(entry), 201
+
+
+@app.route("/finance/workforce/payroll-runs")
+@jwt_required()
+def list_payroll_runs():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+    runs = PayrollRun.query.filter_by(company_id=company.id).order_by(PayrollRun.pay_date.desc(), PayrollRun.id.desc()).all()
+    return {"items": [serialize_payroll_run(run) for run in runs]}
+
+
+@app.route("/finance/workforce/payroll-runs", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def create_payroll_run():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    try:
+        period_start = parse_iso_date(data.get("period_start"), "period_start", today_utc_date().replace(day=1))
+        period_end = parse_iso_date(data.get("period_end"), "period_end", today_utc_date())
+        pay_date = parse_iso_date(data.get("pay_date"), "pay_date", today_utc_date())
+    except ValueError as exc:
+        return error_response(str(exc))
+
+    employees = EmployeeProfile.query.filter_by(company_id=company.id, is_active=True).all()
+    if not employees:
+        return error_response("no active employees to process")
+
+    payroll = PayrollRun(
+        org_id=company.org_id,
+        company_id=company.id,
+        payroll_number=generate_payroll_number(company.id),
+        period_start=period_start,
+        period_end=period_end,
+        pay_date=pay_date,
+        status="processed",
+        created_by=user.id,
+    )
+    db.session.add(payroll)
+    db.session.flush()
+
+    gross_total = 0.0
+    withholding_total = 0.0
+    benefit_total = 0.0
+    mileage_total = 0.0
+    for employee in employees:
+        time_entries = TimeEntry.query.filter(
+            TimeEntry.company_id == company.id,
+            TimeEntry.employee_id == employee.id,
+            TimeEntry.work_date >= period_start,
+            TimeEntry.work_date <= period_end,
+        ).all()
+        mileage_entries = MileageEntry.query.filter(
+            MileageEntry.company_id == company.id,
+            MileageEntry.employee_id == employee.id,
+            MileageEntry.trip_date >= period_start,
+            MileageEntry.trip_date <= period_end,
+        ).all()
+        hours = round(sum(float(entry.hours or 0) for entry in time_entries), 2)
+        gross_pay = round(hours * float(employee.hourly_rate or 0), 2) if employee.pay_type == "hourly" else round(float(employee.salary_amount or 0), 2)
+        withholding_amount = round(gross_pay * (float(employee.withholding_rate or 0) / 100), 2)
+        benefit_amount = round(gross_pay * (float(employee.benefit_rate or 0) / 100), 2)
+        mileage_reimbursement = round(sum(float(entry.miles or 0) * float(entry.rate_per_mile or 0) for entry in mileage_entries), 2)
+        net_pay = round(gross_pay - withholding_amount + mileage_reimbursement, 2)
+        gross_total += gross_pay
+        withholding_total += withholding_amount
+        benefit_total += benefit_amount
+        mileage_total += mileage_reimbursement
+        db.session.add(
+            PayrollLine(
+                payroll_run_id=payroll.id,
+                employee_id=employee.id,
+                regular_hours=hours,
+                gross_pay=gross_pay,
+                withholding_amount=withholding_amount,
+                benefit_amount=benefit_amount,
+                mileage_reimbursement=mileage_reimbursement,
+                net_pay=net_pay,
+            )
+        )
+
+    payroll.gross_pay = round(gross_total, 2)
+    payroll.withholding_total = round(withholding_total, 2)
+    payroll.benefit_total = round(benefit_total, 2)
+    payroll.mileage_reimbursement_total = round(mileage_total, 2)
+    payroll.net_cash = round(gross_total - withholding_total + mileage_total + benefit_total, 2)
+
+    payroll_lines = [
+        {"account_code": "5100", "debit": round(gross_total + benefit_total, 2), "credit": 0, "description": payroll.payroll_number},
+        {"account_code": "1000", "debit": 0, "credit": round(payroll.net_cash, 2), "description": payroll.payroll_number},
+    ]
+    if mileage_total > 0:
+        payroll_lines.insert(1, {"account_code": "5400", "debit": round(mileage_total, 2), "credit": 0, "description": payroll.payroll_number})
+    if withholding_total > 0:
+        payroll_lines.insert(-1, {"account_code": "2200", "debit": 0, "credit": round(withholding_total, 2), "description": payroll.payroll_number})
+
+    post_operational_entry(
+        company,
+        user,
+        source_type="payroll_run",
+        source_id=payroll.id,
+        memo=f"Payroll run {payroll.payroll_number}",
+        lines=payroll_lines,
+        entry_date=pay_date,
+        reference=payroll.payroll_number,
+    )
+
+    if not safe_commit():
+        return error_response("database error while processing payroll", 503)
+
+    log(user.id, f"processed payroll run {payroll.payroll_number}")
+    return serialize_payroll_run(payroll), 201
+
+
+@app.route("/finance/inventory/summary")
+@jwt_required()
+def inventory_workspace_summary():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+    return build_inventory_summary(company)
+
+
+@app.route("/finance/inventory/items")
+@jwt_required()
+def list_inventory_items():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+    items = InventoryItem.query.filter_by(company_id=company.id).order_by(InventoryItem.name.asc()).all()
+    return {"items": [serialize_inventory_item(item) for item in items]}
+
+
+@app.route("/finance/inventory/items", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def create_inventory_item():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    sku = (data.get("sku") or "").strip()
+    name = (data.get("name") or "").strip()
+    if not sku or not name:
+        return error_response("sku and name are required")
+    if InventoryItem.query.filter_by(company_id=company.id, sku=sku).first():
+        return error_response("sku already exists", 409)
+
+    try:
+        item = InventoryItem(
+            org_id=company.org_id,
+            company_id=company.id,
+            sku=sku,
+            name=name,
+            category=(data.get("category") or "").strip() or None,
+            quantity_on_hand=parse_money(data.get("quantity_on_hand", 0), "quantity_on_hand"),
+            reorder_point=parse_money(data.get("reorder_point", 0), "reorder_point"),
+            reorder_quantity=parse_money(data.get("reorder_quantity", 0), "reorder_quantity"),
+            unit_cost=parse_money(data.get("unit_cost", 0), "unit_cost"),
+            unit_price=parse_money(data.get("unit_price", 0), "unit_price"),
+            preferred_vendor_name=(data.get("preferred_vendor_name") or "").strip() or None,
+        )
+    except ValueError as exc:
+        return error_response(str(exc))
+
+    db.session.add(item)
+    db.session.flush()
+    if float(item.quantity_on_hand or 0) > 0:
+        db.session.add(
+            InventoryMovement(
+                org_id=company.org_id,
+                company_id=company.id,
+                inventory_item_id=item.id,
+                movement_type="opening_balance",
+                quantity_delta=float(item.quantity_on_hand or 0),
+                unit_cost=float(item.unit_cost or 0),
+                reference=item.sku,
+            )
+        )
+    if not safe_commit():
+        return error_response("database error while creating inventory item", 503)
+
+    log(user.id, f"created inventory item {item.sku}")
+    return serialize_inventory_item(item), 201
+
+
+@app.route("/finance/purchase-orders")
+@jwt_required()
+def list_purchase_orders():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+    orders = PurchaseOrder.query.filter_by(company_id=company.id).order_by(PurchaseOrder.issue_date.desc(), PurchaseOrder.id.desc()).all()
+    return {"items": [serialize_purchase_order(order) for order in orders]}
+
+
+@app.route("/finance/purchase-orders", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def create_purchase_order():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    vendor_name = (data.get("vendor_name") or "").strip()
+    if not vendor_name:
+        return error_response("vendor_name is required")
+
+    items = data.get("items") or []
+    if not isinstance(items, list) or not items:
+        return error_response("purchase order requires at least one item")
+
+    try:
+        order = PurchaseOrder(
+            org_id=company.org_id,
+            company_id=company.id,
+            po_number=generate_document_number(PurchaseOrder, company.id, "PO"),
+            vendor_name=vendor_name,
+            status="draft",
+            issue_date=parse_iso_date(data.get("issue_date"), "issue_date", today_utc_date()),
+            expected_date=parse_iso_date(data.get("expected_date"), "expected_date", today_utc_date() + datetime.timedelta(days=7)),
+            notes=(data.get("notes") or "").strip() or None,
+            created_by=user.id,
+        )
+        db.session.add(order)
+        db.session.flush()
+        for item in items:
+            quantity = parse_money(item.get("quantity", 0), "purchase order quantity")
+            unit_cost = parse_money(item.get("unit_cost", 0), "purchase order unit_cost")
+            sku = (item.get("sku") or "").strip()
+            inventory_item = InventoryItem.query.filter_by(company_id=company.id, sku=sku).first() if sku else None
+            description = (item.get("description") or "").strip() or (inventory_item.name if inventory_item else "Inventory item")
+            db.session.add(
+                PurchaseOrderLine(
+                    purchase_order_id=order.id,
+                    inventory_item_id=inventory_item.id if inventory_item else None,
+                    sku=sku or (inventory_item.sku if inventory_item else None),
+                    description=description,
+                    quantity=quantity,
+                    unit_cost=unit_cost,
+                    received_quantity=0,
+                )
+            )
+    except ValueError as exc:
+        db.session.rollback()
+        return error_response(str(exc))
+
+    if not safe_commit():
+        return error_response("database error while creating purchase order", 503)
+
+    log(user.id, f"created purchase order {order.po_number}")
+    return serialize_purchase_order(order), 201
+
+
+@app.route("/finance/purchase-orders/<int:purchase_order_id>/submit", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def submit_purchase_order(purchase_order_id):
+    user = get_user_from_token()
+    order = PurchaseOrder.query.filter_by(id=purchase_order_id, org_id=user.org_id).first()
+    if not order:
+        return error_response("purchase order not found", 404)
+
+    order.status = "ordered"
+    if not safe_commit():
+        return error_response("database error while submitting purchase order", 503)
+
+    log(user.id, f"submitted purchase order {order.po_number}")
+    return serialize_purchase_order(order)
+
+
+@app.route("/finance/purchase-orders/<int:purchase_order_id>/receive", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def receive_purchase_order(purchase_order_id):
+    user = get_user_from_token()
+    order = PurchaseOrder.query.filter_by(id=purchase_order_id, org_id=user.org_id).first()
+    if not order:
+        return error_response("purchase order not found", 404)
+    company = resolve_company_for_user(user, order.company_id)
+    if not company:
+        return error_response("company not found", 404)
+
+    try:
+        receive_purchase_order_items(company, user, order, (request.get_json(silent=True) or {}).get("items"))
+    except ValueError as exc:
+        db.session.rollback()
+        return error_response(str(exc))
+
+    if not safe_commit():
+        return error_response("database error while receiving purchase order", 503)
+
+    log(user.id, f"received purchase order {order.po_number}")
+    return serialize_purchase_order(order)
+
+
+@app.route("/finance/projects")
+@jwt_required()
+def list_projects():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+    rows = Project.query.filter_by(company_id=company.id).order_by(Project.updated_at.desc(), Project.id.desc()).all()
+    return {"items": [serialize_project(row) for row in rows]}
+
+
+@app.route("/finance/projects", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def create_project():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    project_code = (data.get("project_code") or "").strip()
+    name = (data.get("name") or "").strip()
+    if not project_code or not name:
+        return error_response("project_code and name are required")
+    if Project.query.filter_by(company_id=company.id, project_code=project_code).first():
+        return error_response("project_code already exists", 409)
+
+    try:
+        project = Project(
+            org_id=company.org_id,
+            company_id=company.id,
+            project_code=project_code,
+            name=name,
+            customer_name=(data.get("customer_name") or "").strip() or None,
+            status=(data.get("status") or "active").strip().lower(),
+            budget_revenue=parse_money(data.get("budget_revenue", 0), "budget_revenue"),
+            budget_cost=parse_money(data.get("budget_cost", 0), "budget_cost"),
+            notes=(data.get("notes") or "").strip() or None,
+        )
+    except ValueError as exc:
+        return error_response(str(exc))
+
+    db.session.add(project)
+    if not safe_commit():
+        return error_response("database error while creating project", 503)
+
+    log(user.id, f"created project {project.project_code}")
+    return serialize_project(project), 201
+
+
+@app.route("/finance/projects/costs", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant", "cashier")
+def create_project_cost():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    project = Project.query.filter_by(id=data.get("project_id"), company_id=company.id).first()
+    if not project:
+        return error_response("project not found", 404)
+
+    entry_type = (data.get("entry_type") or "cost").strip().lower()
+    if entry_type not in {"cost", "revenue"}:
+        return error_response("entry_type must be cost or revenue")
+
+    try:
+        entry = ProjectCostEntry(
+            org_id=company.org_id,
+            company_id=company.id,
+            project_id=project.id,
+            entry_type=entry_type,
+            description=(data.get("description") or "").strip() or f"{entry_type.title()} entry",
+            amount=parse_money(data.get("amount", 0), "amount"),
+            reference=(data.get("reference") or "").strip() or None,
+            work_date=parse_iso_date(data.get("work_date"), "work_date", today_utc_date()),
+        )
+    except ValueError as exc:
+        return error_response(str(exc))
+
+    db.session.add(entry)
+    if not safe_commit():
+        return error_response("database error while creating project cost entry", 503)
+
+    log(user.id, f"posted {entry_type} entry to project {project.project_code}")
+    return serialize_project_cost_entry(entry), 201
+
+
+@app.route("/finance/projects/summary")
+@jwt_required()
+def project_summary():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+    return build_project_summary(company)
+
+
+@app.route("/finance/accountant/toolkit")
+@jwt_required()
+def accountant_toolkit():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+    return build_accountant_toolkit(company)
+
+
+@app.route("/finance/integrations")
+@jwt_required()
+def list_integrations():
+    user = get_user_from_token()
+    if not user:
+        return error_response("invalid token", 401)
+    company = resolve_company_for_user(user, request.args.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+    seed_integration_connections(company)
+    safe_commit()
+    rows = IntegrationConnection.query.filter_by(company_id=company.id).order_by(IntegrationConnection.provider.asc()).all()
+    return {"items": [serialize_integration_connection(row) for row in rows]}
+
+
+@app.route("/finance/integrations", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def connect_integration():
+    user = get_user_from_token()
+    data = request.get_json(silent=True) or {}
+    company = resolve_company_for_user(user, data.get("company_id"))
+    if not company:
+        return error_response("company not found", 404)
+
+    provider = (data.get("provider") or "").strip().lower()
+    if not provider:
+        return error_response("provider is required")
+
+    connection = IntegrationConnection.query.filter_by(company_id=company.id, provider=provider).first()
+    if not connection:
+        category = next((item["category"] for item in INTEGRATION_CATALOG if item["provider"] == provider), "other")
+        connection = IntegrationConnection(
+            org_id=company.org_id,
+            company_id=company.id,
+            provider=provider,
+            category=category,
+        )
+        db.session.add(connection)
+
+    connection.status = "connected"
+    connection.config_json = json.dumps(data.get("config") or {"connected_via": "workspace"})
+    connection.last_synced_at = datetime.datetime.now(datetime.UTC)
+    if not safe_commit():
+        return error_response("database error while connecting integration", 503)
+
+    log(user.id, f"connected integration {provider}")
+    return serialize_integration_connection(connection), 201
+
+
+@app.route("/finance/integrations/<int:integration_id>/sync", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin", "manager", "accountant")
+def sync_integration(integration_id):
+    user = get_user_from_token()
+    connection = IntegrationConnection.query.filter_by(id=integration_id, org_id=user.org_id).first()
+    if not connection:
+        return error_response("integration not found", 404)
+
+    connection.status = "connected"
+    connection.last_synced_at = datetime.datetime.now(datetime.UTC)
+    if not safe_commit():
+        return error_response("database error while syncing integration", 503)
+
+    log(user.id, f"synced integration {connection.provider}")
+    return serialize_integration_connection(connection)
 
 
 # ---------------- API KEY ----------------

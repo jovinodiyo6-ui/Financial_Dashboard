@@ -1,6 +1,6 @@
 # Financial Dashboard
 
-Flask + React financial analysis SaaS.
+Flask + React financial analysis SaaS with a richer CFO-style workspace for operating review, scenario planning, and board-ready exports.
 
 ## Repo Layout
 
@@ -99,6 +99,37 @@ Example: `http://192.168.1.20:5173`
 - `GET /admin/users` (JWT, owner)
 - `GET /health`
 
+## Product Highlights
+
+- Executive control-tower dashboard with financial health scoring
+- Six-month scenario planner for revenue, expense, collections, inventory, and capex stress testing
+- Company-specific workspace autosave for ledger inputs, budgets, partners, and planning assumptions
+- Board narrative and CSV/JSON exports for finance review packs
+- Built-in accounting statements, grouped accounts, budget comparison, and quick journal templates
+- Installable PWA/mobile experience with service-worker caching and app manifest
+- True chart of accounts, balanced journal-entry engine, live registers, and trial balance
+- Invoice workflow with draft/sent states, payment posting, and receivables aging
+- Vendor bill workflow with approval/payment states and payables aging
+- Vendor compliance profiles, bill-pay scheduling, execution tracking, and 1099 readiness
+- Bank-feed import plus reconciliation suggestions and matching
+- Reconciliation workspace with bank rules, exception handling, and auto-apply logic
+- Optional direct bank connectivity through Plaid Link and Plaid Transactions Sync when credentials are configured
+- Tax center for sales tax, purchase tax credit, estimated income tax, company tax profiles, jurisdiction catalogs, and filing queues
+- Payroll, contractors, time tracking, and mileage reimbursement workflows
+- SKU-level inventory, purchase ordering, receiving, reorder visibility, and stock movements
+- Project/job costing, project margin tracking, and accountant toolkit summaries
+- Broader integration hub for Stripe, Slack, Google Drive, Power BI, and Plaid connection states
+
+## Finance Workspace Coverage
+
+- Accounting core: `/finance/chart-of-accounts`, `/finance/journal-entries`, `/finance/register`, `/finance/accounting/overview`
+- Vendor operations: `/finance/vendors`, `/finance/vendors/1099-summary`, `/finance/bill-pay/summary`, `/finance/bill-pay/disbursements`
+- Reconciliation controls: `/finance/reconciliation/rules`, `/finance/reconciliation/workspace`, `/finance/reconciliation/exceptions`
+- Tax automation: `/finance/tax/jurisdictions`, `/finance/tax/filings`, `/finance/tax/filing-preview`
+- Workforce: `/finance/workforce/overview`, `/finance/workforce/employees`, `/finance/workforce/contractors`, `/finance/workforce/time`, `/finance/workforce/mileage`, `/finance/workforce/payroll-runs`
+- Inventory and purchasing: `/finance/inventory/items`, `/finance/inventory/summary`, `/finance/purchase-orders`
+- Projects and integrations: `/finance/projects`, `/finance/projects/costs`, `/finance/projects/summary`, `/finance/accountant/toolkit`, `/finance/integrations`
+
 ## Environment Variables
 
 Backend (`backend/.env`):
@@ -119,6 +150,22 @@ Frontend (`frontend/.env`):
 - `VITE_API_URL` (default: `/api`)
 - `VITE_PROXY_TARGET` (default: `http://127.0.0.1:5000`)
 - `VITE_GOOGLE_CLIENT_ID` (required to show Google button)
+
+Backend direct bank connection and tax profile defaults:
+
+- `PLAID_CLIENT_ID`
+- `PLAID_SECRET`
+- `PLAID_ENV` (`sandbox`, `development`, or `production`)
+- `PLAID_COUNTRY_CODES` (comma-separated, default: `US`)
+- `PLAID_PRODUCTS` (comma-separated, default: `transactions`)
+- `PLAID_WEBHOOK_URL` (optional)
+- `DEFAULT_TAX_JURISDICTION` (optional company default)
+- `DEFAULT_TAX_FILING_FREQUENCY` (`monthly`, `quarterly`, `annual`)
+- `DEFAULT_TAX_CURRENCY`
+- `DEFAULT_SALES_TAX_NAME`
+- `DEFAULT_PURCHASE_TAX_NAME`
+- `DEFAULT_INDIRECT_TAX_RATE`
+- `DEFAULT_INCOME_TAX_RATE`
 
 ## Deployment
 

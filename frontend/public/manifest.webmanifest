@@ -1,0 +1,17 @@
+{
+  "name": "FinancePro Operations Workspace",
+  "short_name": "FinancePro",
+  "description": "Installable finance, accounting, payroll, purchasing, and project workspace.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b1220",
+  "theme_color": "#0f766e",
+  "icons": [
+    {
+      "src": "/pwa-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

@@ -1,11 +1,24 @@
 import { useState, useEffect, useMemo } from "react";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from "recharts";
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, LineChart, Line, CartesianGrid } from "recharts";
+import { usePlaidLink } from "react-plaid-link";
+import {
+  INITIAL_SCENARIO_INPUTS,
+  SCENARIO_PRESETS,
+  buildExecutiveMetrics,
+  buildOperatingSignals,
+  buildForecastModel,
+  buildFinanceAlerts,
+  buildBoardNarrative,
+  statementToCsv,
+  ledgerRowsToCsv,
+} from "./financialWorkbench.js";
 
 const API_URL = (import.meta.env.VITE_API_URL || "/api").trim();
 const TOKEN_KEY = "financepro_token";
 const LAST_EMAIL_KEY = "financepro_last_email";
 const THEME_KEY = "financepro_theme";
 const BUSINESS_TYPE_KEY = "financepro_business_type";
+const WORKSPACE_KEY_PREFIX = "financepro_workspace";
 
 const readStoredToken = () => {
   try {
@@ -79,6 +92,25 @@ const readStoredBusinessType = () => {
 const persistBusinessType = (businessType) => {
   try {
     localStorage.setItem(BUSINESS_TYPE_KEY, businessType);
+  } catch {
+    // Ignore storage failures.
+  }
+};
+
+const getWorkspaceKey = (companyId) => `${WORKSPACE_KEY_PREFIX}_${companyId || "default"}`;
+
+const readStoredWorkspace = (companyId) => {
+  try {
+    const raw = localStorage.getItem(getWorkspaceKey(companyId));
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+};
+
+const persistWorkspace = (companyId, workspace) => {
+  try {
+    localStorage.setItem(getWorkspaceKey(companyId), JSON.stringify(workspace));
   } catch {
     // Ignore storage failures.
   }
@@ -317,6 +349,9 @@ const toAmount = (value) => {
 const formatMoney = (value) =>
   new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value || 0);
 
+const formatPercent = (value) =>
+  `${((Number.isFinite(value) ? value : 0) * 100).toFixed(1)}%`;
+
 const INITIAL_BUDGET_TARGETS = {
   revenue: 0,
   expense: 0,
@@ -340,6 +375,219 @@ const INITIAL_PARTNERS = [
   { id: 1, name: "Partner A", capital: "", share: "50", drawings: "", interestOnCapital: "", salary: "" },
   { id: 2, name: "Partner B", capital: "", share: "50", drawings: "", interestOnCapital: "", salary: "" },
 ];
+
+const createDocumentItem = () => ({
+  description: "",
+  quantity: "1",
+  unit_price: "",
+});
+
+const createInvoiceFormState = () => ({
+  customer_name: "",
+  customer_email: "",
+  due_date: "",
+  tax_rate: "16",
+  status: "sent",
+  notes: "",
+  items: [createDocumentItem()],
+});
+
+const createBillFormState = () => ({
+  vendor_name: "",
+  due_date: "",
+  tax_rate: "16",
+  status: "approved",
+  notes: "",
+  items: [createDocumentItem()],
+});
+
+const createTaxProfileState = () => ({
+  jurisdiction_code: "generic",
+  filing_frequency: "monthly",
+  registration_number: "",
+  currency_code: "USD",
+  sales_tax_name: "Sales Tax",
+  purchase_tax_name: "Purchase Tax Credit",
+  indirect_tax_rate: "16",
+  income_tax_rate: "30",
+  period_start_month: "1",
+});
+
+const createAccountFormState = () => ({
+  code: "",
+  name: "",
+  category: "expense",
+  subtype: "operating",
+  normal_balance: "debit",
+  description: "",
+});
+
+const createJournalLine = () => ({
+  account_code: "",
+  debit: "",
+  credit: "",
+  description: "",
+});
+
+const createJournalFormState = () => ({
+  memo: "",
+  entry_date: "",
+  reference: "",
+  lines: [createJournalLine(), createJournalLine()],
+});
+
+const createVendorFormState = () => ({
+  vendor_name: "",
+  email: "",
+  tax_id: "",
+  default_payment_rail: "ach",
+  is_1099_eligible: true,
+  tax_form_type: "1099-NEC",
+  tin_status: "pending",
+  bank_last4: "",
+  remittance_reference: "",
+});
+
+const createReconciliationRuleState = () => ({
+  name: "",
+  keyword: "",
+  direction: "any",
+  auto_action: "suggest_account",
+  target_reference: "",
+  exception_type: "review_required",
+  priority: "100",
+  min_amount: "",
+  max_amount: "",
+});
+
+const createTaxFilingFormState = () => ({
+  filing_type: "indirect_tax",
+  period_start: "",
+  period_end: "",
+});
+
+const createEmployeeFormState = () => ({
+  full_name: "",
+  email: "",
+  pay_type: "hourly",
+  hourly_rate: "",
+  salary_amount: "",
+  withholding_rate: "10",
+  benefit_rate: "5",
+});
+
+const createContractorFormState = () => ({
+  full_name: "",
+  email: "",
+  tax_id: "",
+  default_rate: "",
+  is_1099_eligible: true,
+  tax_form_type: "1099-NEC",
+});
+
+const createTimeEntryFormState = () => ({
+  employee_id: "",
+  contractor_id: "",
+  project_id: "",
+  work_date: "",
+  hours: "",
+  hourly_cost: "",
+  billable_rate: "",
+  description: "",
+});
+
+const createMileageFormState = () => ({
+  employee_id: "",
+  contractor_id: "",
+  project_id: "",
+  trip_date: "",
+  miles: "",
+  rate_per_mile: "0.725",
+  purpose: "",
+});
+
+const createInventoryItemFormState = () => ({
+  sku: "",
+  name: "",
+  category: "",
+  quantity_on_hand: "",
+  reorder_point: "",
+  reorder_quantity: "",
+  unit_cost: "",
+  unit_price: "",
+  preferred_vendor_name: "",
+});
+
+const createPurchaseOrderItem = () => ({
+  sku: "",
+  description: "",
+  quantity: "",
+  unit_cost: "",
+});
+
+const createPurchaseOrderFormState = () => ({
+  vendor_name: "",
+  issue_date: "",
+  expected_date: "",
+  notes: "",
+  items: [createPurchaseOrderItem()],
+});
+
+const createProjectFormState = () => ({
+  project_code: "",
+  name: "",
+  customer_name: "",
+  status: "active",
+  budget_revenue: "",
+  budget_cost: "",
+  notes: "",
+});
+
+const createProjectCostFormState = () => ({
+  project_id: "",
+  entry_type: "cost",
+  description: "",
+  amount: "",
+  reference: "",
+  work_date: "",
+});
+
+const createIntegrationFormState = () => ({
+  provider: "stripe",
+});
+
+const cloneTemplateRows = (rows) => rows.map((row, index) => ({ ...row, id: index + 1 }));
+
+const normalizeLedgerRows = (rows, fallbackBusinessType = "sole_proprietor") => {
+  if (!Array.isArray(rows) || !rows.length) {
+    return cloneTemplateRows(BUSINESS_TEMPLATE_ROWS[fallbackBusinessType] || INITIAL_LEDGER_ROWS);
+  }
+
+  return rows.map((row, index) => ({
+    id: index + 1,
+    account: row.account || "",
+    type: row.type || "expense",
+    subtype: row.subtype || getSubtypeOptions(row.type || "expense")[0],
+    amount: row.amount ?? "",
+    depreciation: row.depreciation ?? "",
+  }));
+};
+
+const normalizePartners = (partners) => {
+  if (!Array.isArray(partners) || !partners.length) {
+    return INITIAL_PARTNERS.map((partner) => ({ ...partner }));
+  }
+
+  return partners.map((partner, index) => ({
+    id: partner.id ?? index + 1,
+    name: partner.name || `Partner ${String.fromCharCode(65 + index)}`,
+    capital: partner.capital ?? "",
+    share: partner.share ?? "",
+    drawings: partner.drawings ?? "",
+    interestOnCapital: partner.interestOnCapital ?? "",
+    salary: partner.salary ?? "",
+  }));
+};
 
 const getAccountGroupLabel = (row) => {
   if (row.type === "asset") {
@@ -386,8 +634,42 @@ export default function App() {
   const [file, setFile] = useState(null);
   const [stats, setStats] = useState(null);
   const [dashboardStats, setDashboardStats] = useState(null);
+  const [financeSummary, setFinanceSummary] = useState(null);
+  const [taxSummary, setTaxSummary] = useState(null);
+  const [taxProfile, setTaxProfile] = useState(() => createTaxProfileState());
+  const [taxFilingPreview, setTaxFilingPreview] = useState(null);
+  const [chartOfAccounts, setChartOfAccounts] = useState([]);
+  const [accountingOverviewData, setAccountingOverviewData] = useState(null);
+  const [accountRegister, setAccountRegister] = useState(null);
+  const [vendors, setVendors] = useState([]);
+  const [vendor1099Summary, setVendor1099Summary] = useState(null);
+  const [billPaySummary, setBillPaySummary] = useState(null);
+  const [reconciliationRules, setReconciliationRules] = useState([]);
+  const [reconciliationWorkspaceData, setReconciliationWorkspaceData] = useState(null);
+  const [taxJurisdictions, setTaxJurisdictions] = useState([]);
+  const [taxFilings, setTaxFilings] = useState([]);
+  const [workforceOverviewData, setWorkforceOverviewData] = useState(null);
+  const [employees, setEmployees] = useState([]);
+  const [contractors, setContractors] = useState([]);
+  const [timeEntries, setTimeEntries] = useState([]);
+  const [mileageEntries, setMileageEntries] = useState([]);
+  const [payrollRuns, setPayrollRuns] = useState([]);
+  const [inventoryWorkspace, setInventoryWorkspace] = useState(null);
+  const [projects, setProjects] = useState([]);
+  const [projectSummaryData, setProjectSummaryData] = useState(null);
+  const [accountantToolkitData, setAccountantToolkitData] = useState(null);
+  const [integrations, setIntegrations] = useState([]);
+  const [receivablesData, setReceivablesData] = useState(null);
+  const [payablesData, setPayablesData] = useState(null);
+  const [invoices, setInvoices] = useState([]);
+  const [bills, setBills] = useState([]);
+  const [bankTransactions, setBankTransactions] = useState([]);
+  const [bankConnections, setBankConnections] = useState([]);
+  const [bankingProviders, setBankingProviders] = useState({});
+  const [reconciliationItems, setReconciliationItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [authLoading, setAuthLoading] = useState(false);
+  const [financeLoading, setFinanceLoading] = useState(false);
   const [userCount, setUserCount] = useState(0);
   const [userCountUpdating, setUserCountUpdating] = useState(false);
   const [recentActivity, setRecentActivity] = useState([]);
@@ -407,14 +689,42 @@ export default function App() {
   const [budgetTargets, setBudgetTargets] = useState(INITIAL_BUDGET_TARGETS);
   const [manufacturingInputs, setManufacturingInputs] = useState(INITIAL_MANUFACTURING_INPUTS);
   const [partners, setPartners] = useState(INITIAL_PARTNERS);
+  const [scenarioInputs, setScenarioInputs] = useState(INITIAL_SCENARIO_INPUTS);
+  const [workspaceReady, setWorkspaceReady] = useState(false);
+  const [invoiceForm, setInvoiceForm] = useState(() => createInvoiceFormState());
+  const [billForm, setBillForm] = useState(() => createBillFormState());
+  const [bankFeedFile, setBankFeedFile] = useState(null);
+  const [plaidLinkToken, setPlaidLinkToken] = useState("");
   const [quickAmount, setQuickAmount] = useState("");
   const [quickEntryId, setQuickEntryId] = useState("invoice-on-credit");
+  const [accountForm, setAccountForm] = useState(() => createAccountFormState());
+  const [journalForm, setJournalForm] = useState(() => createJournalFormState());
+  const [vendorForm, setVendorForm] = useState(() => createVendorFormState());
+  const [reconciliationRuleForm, setReconciliationRuleForm] = useState(() => createReconciliationRuleState());
+  const [taxFilingForm, setTaxFilingForm] = useState(() => createTaxFilingFormState());
+  const [employeeForm, setEmployeeForm] = useState(() => createEmployeeFormState());
+  const [contractorForm, setContractorForm] = useState(() => createContractorFormState());
+  const [timeEntryForm, setTimeEntryForm] = useState(() => createTimeEntryFormState());
+  const [mileageForm, setMileageForm] = useState(() => createMileageFormState());
+  const [inventoryItemForm, setInventoryItemForm] = useState(() => createInventoryItemFormState());
+  const [purchaseOrderForm, setPurchaseOrderForm] = useState(() => createPurchaseOrderFormState());
+  const [projectForm, setProjectForm] = useState(() => createProjectFormState());
+  const [projectCostForm, setProjectCostForm] = useState(() => createProjectCostFormState());
+  const [integrationForm, setIntegrationForm] = useState(() => createIntegrationFormState());
+  const [selectedRegisterAccountId, setSelectedRegisterAccountId] = useState("");
   const isDarkMode = themeMode === "dark";
 
   const availableQuickEntries = useMemo(
     () => QUICK_ENTRY_TEMPLATES.filter((template) => template.businessTypes.includes(businessType)),
     [businessType],
   );
+
+  const selectedCompany = useMemo(
+    () => companies.find((company) => String(company.id) === String(selectedCompanyId)) || null,
+    [companies, selectedCompanyId],
+  );
+  const canManageFinanceOps = ["owner", "admin", "manager", "accountant", "cashier"].includes(currentUser?.role || "");
+  const canManagePayables = ["owner", "admin", "manager", "accountant"].includes(currentUser?.role || "");
 
   const groupedLedgerRows = useMemo(() => {
     return ledgerRows.reduce((groups, row) => {
@@ -591,6 +901,14 @@ export default function App() {
       increaseCurrentAssets -
       decreaseCurrentLiabilities;
 
+    const cashBalance = amountByAccount("Cash", "Cash and Cash Equivalents");
+    const receivablesBalance = amountByAccount("Accounts Receivable");
+    const inventoryBalance =
+      amountByAccount("Inventory") +
+      amountByAccount("Closing Stock") +
+      amountByAccount("Closing Raw Materials");
+    const payablesBalance = amountByAccount("Accounts Payable", "Accrued Expenses");
+
     const cashGeneratedFromOperations = operatingProfitBeforeWorkingCapital + workingCapitalAdjustments;
     const incomeTaxesPaid = amountByAccount("Income Taxes Paid");
     const netCashFromOperations = cashGeneratedFromOperations - incomeTaxesPaid;
@@ -705,6 +1023,10 @@ export default function App() {
       cashGeneratedFromOperations,
       incomeTaxesPaid,
       netCashFromOperations,
+      cashBalance,
+      receivablesBalance,
+      inventoryBalance,
+      payablesBalance,
       appropriationInterest,
       appropriationSalary,
       appropriationBase,
@@ -732,6 +1054,31 @@ export default function App() {
     [statement, budgetTargets],
   );
 
+  const executiveMetrics = useMemo(
+    () => buildExecutiveMetrics(statement, dashboardStats, stats),
+    [statement, dashboardStats, stats],
+  );
+
+  const operatingSignals = useMemo(
+    () => buildOperatingSignals(statement),
+    [statement],
+  );
+
+  const forecastModel = useMemo(
+    () => buildForecastModel(statement, scenarioInputs),
+    [statement, scenarioInputs],
+  );
+
+  const financeAlerts = useMemo(
+    () => buildFinanceAlerts(statement, executiveMetrics, forecastModel),
+    [statement, executiveMetrics, forecastModel],
+  );
+
+  const boardNarrative = useMemo(
+    () => buildBoardNarrative(selectedCompany?.name, statement, executiveMetrics, forecastModel),
+    [selectedCompany, statement, executiveMetrics, forecastModel],
+  );
+
   const authorizedFetch = async (path, options = {}) => {
     const headers = {
       ...(options.headers || {}),
@@ -753,6 +1100,9 @@ export default function App() {
 
     return payload;
   };
+
+  const buildCompanyQuery = (companyId = selectedCompanyId) =>
+    companyId ? `?company_id=${encodeURIComponent(companyId)}` : "";
 
   const login = async () => {
     setErrorMessage("");
@@ -851,12 +1201,67 @@ export default function App() {
     }
     setToken(null);
     persistToken(null);
+    setCompanies([]);
+    setSelectedCompanyId("");
     setStats(null);
     setDashboardStats(null);
+    setFinanceSummary(null);
+    setTaxSummary(null);
+    setTaxProfile(createTaxProfileState());
+    setTaxFilingPreview(null);
+    setChartOfAccounts([]);
+    setAccountingOverviewData(null);
+    setAccountRegister(null);
+    setVendors([]);
+    setVendor1099Summary(null);
+    setBillPaySummary(null);
+    setReconciliationRules([]);
+    setReconciliationWorkspaceData(null);
+    setTaxJurisdictions([]);
+    setTaxFilings([]);
+    setWorkforceOverviewData(null);
+    setEmployees([]);
+    setContractors([]);
+    setTimeEntries([]);
+    setMileageEntries([]);
+    setPayrollRuns([]);
+    setInventoryWorkspace(null);
+    setProjects([]);
+    setProjectSummaryData(null);
+    setAccountantToolkitData(null);
+    setIntegrations([]);
+    setReceivablesData(null);
+    setPayablesData(null);
+    setInvoices([]);
+    setBills([]);
+    setBankTransactions([]);
+    setBankConnections([]);
+    setBankingProviders({});
+    setReconciliationItems([]);
     setUserCount(0);
     setCurrentUser(null);
     setAdminUsers([]);
     setFile(null);
+    setBankFeedFile(null);
+    setPlaidLinkToken("");
+    setInvoiceForm(createInvoiceFormState());
+    setBillForm(createBillFormState());
+    setAccountForm(createAccountFormState());
+    setJournalForm(createJournalFormState());
+    setVendorForm(createVendorFormState());
+    setReconciliationRuleForm(createReconciliationRuleState());
+    setTaxFilingForm(createTaxFilingFormState());
+    setEmployeeForm(createEmployeeFormState());
+    setContractorForm(createContractorFormState());
+    setTimeEntryForm(createTimeEntryFormState());
+    setMileageForm(createMileageFormState());
+    setInventoryItemForm(createInventoryItemFormState());
+    setPurchaseOrderForm(createPurchaseOrderFormState());
+    setProjectForm(createProjectFormState());
+    setProjectCostForm(createProjectCostFormState());
+    setIntegrationForm(createIntegrationFormState());
+    setSelectedRegisterAccountId("");
+    setWorkspaceReady(false);
     setInfoMessage("Signed out.");
   };
 
@@ -865,8 +1270,8 @@ export default function App() {
     setStats(data);
   };
 
-  const loadDashboardStats = async () => {
-    const path = selectedCompanyId ? `/dashboard?company_id=${selectedCompanyId}` : "/dashboard";
+  const loadDashboardStats = async (companyId = selectedCompanyId) => {
+    const path = `/dashboard${buildCompanyQuery(companyId)}`;
     const data = await authorizedFetch(path);
     setDashboardStats(data);
   };
@@ -940,6 +1345,141 @@ export default function App() {
       setAdminUsers(Array.isArray(users) ? users : []);
     } catch {
       setAdminUsers([]);
+    }
+  };
+
+  const loadAccountRegister = async (companyId = selectedCompanyId, accountId = selectedRegisterAccountId) => {
+    const params = new URLSearchParams();
+    if (companyId) {
+      params.set("company_id", companyId);
+    }
+    if (accountId) {
+      params.set("account_id", accountId);
+    }
+    const suffix = params.toString() ? `?${params.toString()}` : "";
+    const payload = await authorizedFetch(`/finance/register${suffix}`);
+    setAccountRegister(payload);
+    if (payload?.account?.id) {
+      setSelectedRegisterAccountId(String(payload.account.id));
+    }
+  };
+
+  const loadFinanceWorkspace = async (companyId = selectedCompanyId) => {
+    const query = buildCompanyQuery(companyId);
+    setFinanceLoading(true);
+    try {
+      const [
+        summary,
+        tax,
+        taxProfilePayload,
+        filingPreview,
+        receivables,
+        payables,
+        invoicePayload,
+        billPayload,
+        bankPayload,
+        bankingProviderPayload,
+        bankingConnectionPayload,
+        reconciliationPayload,
+        chartPayload,
+        accountingPayload,
+        vendorPayload,
+        vendor1099Payload,
+        billPayPayload,
+        reconciliationRulePayload,
+        reconciliationWorkspacePayload,
+        taxJurisdictionPayload,
+        taxFilingsPayload,
+        workforcePayload,
+        employeePayload,
+        contractorPayload,
+        timePayload,
+        mileagePayload,
+        payrollPayload,
+        inventoryPayload,
+        projectSummaryPayload,
+        accountantPayload,
+        integrationPayload,
+      ] = await Promise.all([
+        authorizedFetch(`/finance/summary${query}`),
+        authorizedFetch(`/finance/tax/summary${query}`),
+        authorizedFetch(`/finance/tax/profile${query}`),
+        authorizedFetch(`/finance/tax/filing-preview${query}`),
+        authorizedFetch(`/finance/receivables${query}`),
+        authorizedFetch(`/finance/payables${query}`),
+        authorizedFetch(`/finance/invoices${query}`),
+        authorizedFetch(`/finance/bills${query}`),
+        authorizedFetch(`/finance/bank-transactions${query}`),
+        authorizedFetch(`/finance/banking/providers`),
+        authorizedFetch(`/finance/banking/connections${query}`),
+        authorizedFetch(`/finance/reconciliation/suggestions${query}`),
+        authorizedFetch(`/finance/chart-of-accounts${query}`),
+        authorizedFetch(`/finance/accounting/overview${query}`),
+        authorizedFetch(`/finance/vendors${query}`),
+        authorizedFetch(`/finance/vendors/1099-summary${query}`),
+        authorizedFetch(`/finance/bill-pay/summary${query}`),
+        authorizedFetch(`/finance/reconciliation/rules${query}`),
+        authorizedFetch(`/finance/reconciliation/workspace${query}`),
+        authorizedFetch(`/finance/tax/jurisdictions`),
+        authorizedFetch(`/finance/tax/filings${query}`),
+        authorizedFetch(`/finance/workforce/overview${query}`),
+        authorizedFetch(`/finance/workforce/employees${query}`),
+        authorizedFetch(`/finance/workforce/contractors${query}`),
+        authorizedFetch(`/finance/workforce/time${query}`),
+        authorizedFetch(`/finance/workforce/mileage${query}`),
+        authorizedFetch(`/finance/workforce/payroll-runs${query}`),
+        authorizedFetch(`/finance/inventory/summary${query}`),
+        authorizedFetch(`/finance/projects/summary${query}`),
+        authorizedFetch(`/finance/accountant/toolkit${query}`),
+        authorizedFetch(`/finance/integrations${query}`),
+      ]);
+
+      setFinanceSummary(summary);
+      setTaxSummary(tax);
+      setTaxProfile({
+        ...createTaxProfileState(),
+        ...taxProfilePayload,
+        indirect_tax_rate: String(taxProfilePayload?.indirect_tax_rate ?? 16),
+        income_tax_rate: String(taxProfilePayload?.income_tax_rate ?? 30),
+        period_start_month: String(taxProfilePayload?.period_start_month ?? 1),
+      });
+      setTaxFilingPreview(filingPreview);
+      setReceivablesData(receivables);
+      setPayablesData(payables);
+      setInvoices(Array.isArray(invoicePayload.items) ? invoicePayload.items : []);
+      setBills(Array.isArray(billPayload.items) ? billPayload.items : []);
+      setBankTransactions(Array.isArray(bankPayload.items) ? bankPayload.items : []);
+      setBankingProviders(bankingProviderPayload || {});
+      setBankConnections(Array.isArray(bankingConnectionPayload.items) ? bankingConnectionPayload.items : []);
+      setReconciliationItems(Array.isArray(reconciliationPayload.items) ? reconciliationPayload.items : []);
+      setChartOfAccounts(Array.isArray(chartPayload.items) ? chartPayload.items : []);
+      setAccountingOverviewData(accountingPayload || null);
+      setVendors(Array.isArray(vendorPayload.items) ? vendorPayload.items : []);
+      setVendor1099Summary(vendor1099Payload || null);
+      setBillPaySummary(billPayPayload || null);
+      setReconciliationRules(Array.isArray(reconciliationRulePayload.items) ? reconciliationRulePayload.items : []);
+      setReconciliationWorkspaceData(reconciliationWorkspacePayload || null);
+      setTaxJurisdictions(Array.isArray(taxJurisdictionPayload.items) ? taxJurisdictionPayload.items : []);
+      setTaxFilings(Array.isArray(taxFilingsPayload.items) ? taxFilingsPayload.items : []);
+      setWorkforceOverviewData(workforcePayload || null);
+      setEmployees(Array.isArray(employeePayload.items) ? employeePayload.items : []);
+      setContractors(Array.isArray(contractorPayload.items) ? contractorPayload.items : []);
+      setTimeEntries(Array.isArray(timePayload.items) ? timePayload.items : []);
+      setMileageEntries(Array.isArray(mileagePayload.items) ? mileagePayload.items : []);
+      setPayrollRuns(Array.isArray(payrollPayload.items) ? payrollPayload.items : []);
+      setInventoryWorkspace(inventoryPayload || null);
+      setProjectSummaryData(projectSummaryPayload || null);
+      setProjects(Array.isArray(projectSummaryPayload?.items) ? projectSummaryPayload.items : []);
+      setAccountantToolkitData(accountantPayload || null);
+      setIntegrations(Array.isArray(integrationPayload.items) ? integrationPayload.items : []);
+      const preferredRegisterId = selectedRegisterAccountId || chartPayload?.items?.[0]?.id;
+      if (preferredRegisterId) {
+        await loadAccountRegister(companyId, preferredRegisterId);
+      } else {
+        setAccountRegister(null);
+      }
+    } finally {
+      setFinanceLoading(false);
     }
   };
 
@@ -1083,7 +1623,7 @@ export default function App() {
   };
 
   const applyBusinessTemplate = () => {
-    setLedgerRows(BUSINESS_TEMPLATE_ROWS[businessType].map((row) => ({ ...row })));
+    setLedgerRows(cloneTemplateRows(BUSINESS_TEMPLATE_ROWS[businessType]));
     setInfoMessage("Business-specific input template loaded.");
     setErrorMessage("");
   };
@@ -1190,6 +1730,958 @@ export default function App() {
 
   const updateBudgetTarget = (key, value) => {
     setBudgetTargets((current) => ({ ...current, [key]: value }));
+  };
+
+  const updateScenarioInput = (key, value) => {
+    setScenarioInputs((current) => ({ ...current, [key]: value }));
+  };
+
+  const applyScenarioPreset = (presetId) => {
+    const preset = SCENARIO_PRESETS.find((item) => item.id === presetId);
+    if (!preset) {
+      return;
+    }
+
+    setScenarioInputs({ ...preset.values });
+    setInfoMessage(`${preset.label} scenario loaded.`);
+    setErrorMessage("");
+  };
+
+  const downloadFile = (filename, content, mimeType) => {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 500);
+  };
+
+  const exportExecutiveSummary = () => {
+    downloadFile("financepro-executive-summary.csv", statementToCsv(statement), "text/csv;charset=utf-8");
+    setInfoMessage("Executive summary exported.");
+    setErrorMessage("");
+  };
+
+  const exportLedger = () => {
+    downloadFile("financepro-ledger.csv", ledgerRowsToCsv(ledgerRows), "text/csv;charset=utf-8");
+    setInfoMessage("Ledger exported.");
+    setErrorMessage("");
+  };
+
+  const exportWorkspace = () => {
+    const payload = {
+      generatedAt: new Date().toISOString(),
+      company: selectedCompany?.name || "Main Company",
+      businessType,
+      statement,
+      executiveMetrics,
+      scenarioInputs,
+      forecast: forecastModel,
+      boardNarrative,
+      budgetTargets,
+      ledgerRows,
+    };
+    downloadFile("financepro-workspace.json", JSON.stringify(payload, null, 2), "application/json;charset=utf-8");
+    setInfoMessage("Workspace snapshot exported.");
+    setErrorMessage("");
+  };
+
+  const updateInvoiceFormField = (key, value) => {
+    setInvoiceForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const updateBillFormField = (key, value) => {
+    setBillForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const updateTaxProfileField = (key, value) => {
+    setTaxProfile((current) => ({ ...current, [key]: value }));
+  };
+
+  const updateAccountFormField = (key, value) => {
+    setAccountForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const updateVendorFormField = (key, value) => {
+    setVendorForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const updateReconciliationRuleField = (key, value) => {
+    setReconciliationRuleForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const updateTaxFilingFormField = (key, value) => {
+    setTaxFilingForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const updateEmployeeFormField = (key, value) => {
+    setEmployeeForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const updateContractorFormField = (key, value) => {
+    setContractorForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const updateTimeEntryFormField = (key, value) => {
+    setTimeEntryForm((current) => {
+      const next = { ...current, [key]: value };
+      if (key === "employee_id" && value) {
+        next.contractor_id = "";
+      }
+      if (key === "contractor_id" && value) {
+        next.employee_id = "";
+      }
+      return next;
+    });
+  };
+
+  const updateMileageFormField = (key, value) => {
+    setMileageForm((current) => {
+      const next = { ...current, [key]: value };
+      if (key === "employee_id" && value) {
+        next.contractor_id = "";
+      }
+      if (key === "contractor_id" && value) {
+        next.employee_id = "";
+      }
+      return next;
+    });
+  };
+
+  const updateInventoryItemFormField = (key, value) => {
+    setInventoryItemForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const updateProjectFormField = (key, value) => {
+    setProjectForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const updateProjectCostFormField = (key, value) => {
+    setProjectCostForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const updateIntegrationFormField = (key, value) => {
+    setIntegrationForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const updateDocumentItem = (setter, index, key, value) => {
+    setter((current) => ({
+      ...current,
+      items: current.items.map((item, itemIndex) => (itemIndex === index ? { ...item, [key]: value } : item)),
+    }));
+  };
+
+  const updateJournalLine = (index, key, value) => {
+    setJournalForm((current) => ({
+      ...current,
+      lines: current.lines.map((line, lineIndex) => (lineIndex === index ? { ...line, [key]: value } : line)),
+    }));
+  };
+
+  const addJournalLine = () => {
+    setJournalForm((current) => ({ ...current, lines: [...current.lines, createJournalLine()] }));
+  };
+
+  const removeJournalLine = (index) => {
+    setJournalForm((current) => ({
+      ...current,
+      lines: current.lines.length > 2 ? current.lines.filter((_, lineIndex) => lineIndex !== index) : current.lines,
+    }));
+  };
+
+  const updatePurchaseOrderFormField = (key, value) => {
+    setPurchaseOrderForm((current) => ({ ...current, [key]: value }));
+  };
+
+  const updatePurchaseOrderItem = (index, key, value) => {
+    setPurchaseOrderForm((current) => ({
+      ...current,
+      items: current.items.map((item, itemIndex) => (itemIndex === index ? { ...item, [key]: value } : item)),
+    }));
+  };
+
+  const addPurchaseOrderItem = () => {
+    setPurchaseOrderForm((current) => ({ ...current, items: [...current.items, createPurchaseOrderItem()] }));
+  };
+
+  const removePurchaseOrderItem = (index) => {
+    setPurchaseOrderForm((current) => ({
+      ...current,
+      items: current.items.length > 1 ? current.items.filter((_, itemIndex) => itemIndex !== index) : current.items,
+    }));
+  };
+
+  const addDocumentItem = (setter) => {
+    setter((current) => ({ ...current, items: [...current.items, createDocumentItem()] }));
+  };
+
+  const removeDocumentItem = (setter, index) => {
+    setter((current) => ({
+      ...current,
+      items: current.items.length > 1 ? current.items.filter((_, itemIndex) => itemIndex !== index) : current.items,
+    }));
+  };
+
+  const createInvoiceRecord = async () => {
+    setErrorMessage("");
+    setInfoMessage("");
+
+    try {
+      await authorizedFetch("/finance/invoices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...invoiceForm,
+          company_id: selectedCompanyId || undefined,
+          tax_rate: Number(invoiceForm.tax_rate || 0),
+          items: invoiceForm.items.map((item) => ({
+            description: item.description,
+            quantity: Number(item.quantity || 0),
+            unit_price: Number(item.unit_price || 0),
+          })),
+        }),
+      });
+      setInvoiceForm(createInvoiceFormState());
+      await loadFinanceWorkspace();
+      setInfoMessage("Invoice workflow created.");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to create invoice.");
+    }
+  };
+
+  const createBillRecord = async () => {
+    setErrorMessage("");
+    setInfoMessage("");
+
+    try {
+      await authorizedFetch("/finance/bills", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...billForm,
+          company_id: selectedCompanyId || undefined,
+          tax_rate: Number(billForm.tax_rate || 0),
+          items: billForm.items.map((item) => ({
+            description: item.description,
+            quantity: Number(item.quantity || 0),
+            unit_price: Number(item.unit_price || 0),
+          })),
+        }),
+      });
+      setBillForm(createBillFormState());
+      await loadFinanceWorkspace();
+      setInfoMessage("Vendor bill captured.");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to create bill.");
+    }
+  };
+
+  const updateInvoiceWorkflowStatus = async (invoiceId, status) => {
+    try {
+      await authorizedFetch(`/finance/invoices/${invoiceId}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      await loadFinanceWorkspace();
+      setInfoMessage(`Invoice moved to ${status}.`);
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to update invoice status.");
+    }
+  };
+
+  const updateBillWorkflowStatus = async (billId, status) => {
+    try {
+      await authorizedFetch(`/finance/bills/${billId}/status`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      await loadFinanceWorkspace();
+      setInfoMessage(`Bill moved to ${status}.`);
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to update bill status.");
+    }
+  };
+
+  const promptAndRecordInvoicePayment = async (invoice) => {
+    const amount = window.prompt(`Record payment for ${invoice.invoice_number}`, String(invoice.balance_due || 0));
+    if (amount === null) {
+      return;
+    }
+    const reference = window.prompt("Reference / memo", "Manual receipt");
+    try {
+      await authorizedFetch(`/finance/invoices/${invoice.id}/payments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount: Number(amount), reference: reference || "" }),
+      });
+      await loadFinanceWorkspace();
+      setInfoMessage(`Payment recorded for ${invoice.invoice_number}.`);
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to record invoice payment.");
+    }
+  };
+
+  const promptAndRecordBillPayment = async (bill) => {
+    const amount = window.prompt(`Record payment for ${bill.bill_number}`, String(bill.balance_due || 0));
+    if (amount === null) {
+      return;
+    }
+    const reference = window.prompt("Reference / memo", "Manual disbursement");
+    try {
+      await authorizedFetch(`/finance/bills/${bill.id}/payments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount: Number(amount), reference: reference || "" }),
+      });
+      await loadFinanceWorkspace();
+      setInfoMessage(`Payment recorded for ${bill.bill_number}.`);
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to record bill payment.");
+    }
+  };
+
+  const importBankFeed = async () => {
+    setErrorMessage("");
+    setInfoMessage("");
+
+    if (!bankFeedFile) {
+      setErrorMessage("Choose a bank feed file first.");
+      return;
+    }
+
+    try {
+      const form = new FormData();
+      form.append("file", bankFeedFile);
+      if (selectedCompanyId) {
+        form.append("company_id", selectedCompanyId);
+      }
+      const response = await authorizedFetch("/finance/bank-feed/import", {
+        method: "POST",
+        body: form,
+      });
+      setBankFeedFile(null);
+      await loadFinanceWorkspace();
+      setInfoMessage(`Imported ${response.imported || 0} bank transaction(s).`);
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to import bank feed.");
+    }
+  };
+
+  const createPlaidLinkToken = async () => {
+    setErrorMessage("");
+    setInfoMessage("");
+    try {
+      const response = await authorizedFetch("/finance/banking/plaid/link-token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ company_id: selectedCompanyId || undefined }),
+      });
+      if (!response.link_token) {
+        throw new Error("Plaid did not return a link token.");
+      }
+      setPlaidLinkToken(response.link_token);
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to initialize bank connection.");
+    }
+  };
+
+  const syncPlaidTransactions = async (connectionId) => {
+    try {
+      const response = await authorizedFetch("/finance/banking/plaid/sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          company_id: selectedCompanyId || undefined,
+          connection_id: connectionId,
+        }),
+      });
+      await loadFinanceWorkspace();
+      setInfoMessage(`Plaid sync complete. Added ${response.added || 0} transaction(s).`);
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to sync Plaid transactions.");
+      throw error;
+    }
+  };
+
+  const saveTaxProfile = async () => {
+    setErrorMessage("");
+    setInfoMessage("");
+    try {
+      await authorizedFetch("/finance/tax/profile", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...taxProfile,
+          company_id: selectedCompanyId || undefined,
+          indirect_tax_rate: Number(taxProfile.indirect_tax_rate || 0),
+          income_tax_rate: Number(taxProfile.income_tax_rate || 0),
+          period_start_month: Number(taxProfile.period_start_month || 1),
+        }),
+      });
+      await loadFinanceWorkspace();
+      setInfoMessage("Tax profile updated.");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to update tax profile.");
+    }
+  };
+
+  const seedDefaultChartOfAccounts = async () => {
+    try {
+      await authorizedFetch("/finance/chart-of-accounts/seed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ company_id: selectedCompanyId || undefined }),
+      });
+      await loadFinanceWorkspace();
+      setInfoMessage("Default chart of accounts seeded.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to seed chart of accounts.");
+    }
+  };
+
+  const createChartAccount = async () => {
+    try {
+      await authorizedFetch("/finance/chart-of-accounts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...accountForm,
+          company_id: selectedCompanyId || undefined,
+        }),
+      });
+      setAccountForm(createAccountFormState());
+      await loadFinanceWorkspace();
+      setInfoMessage("Account created.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to create account.");
+    }
+  };
+
+  const postManualJournal = async () => {
+    try {
+      await authorizedFetch("/finance/journal-entries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...journalForm,
+          company_id: selectedCompanyId || undefined,
+          lines: journalForm.lines.map((line) => ({
+            ...line,
+            debit: Number(line.debit || 0),
+            credit: Number(line.credit || 0),
+          })),
+        }),
+      });
+      setJournalForm(createJournalFormState());
+      await loadFinanceWorkspace();
+      setInfoMessage("Journal entry posted.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to post journal entry.");
+    }
+  };
+
+  const saveVendorProfile = async () => {
+    try {
+      await authorizedFetch("/finance/vendors", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...vendorForm,
+          company_id: selectedCompanyId || undefined,
+        }),
+      });
+      setVendorForm(createVendorFormState());
+      await loadFinanceWorkspace();
+      setInfoMessage("Vendor profile saved.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to save vendor.");
+    }
+  };
+
+  const scheduleBillDisbursement = async (bill) => {
+    const amount = window.prompt(`Schedule payment for ${bill.bill_number}`, String(bill.balance_due || 0));
+    if (amount === null) {
+      return;
+    }
+    const rail = window.prompt("Payment rail (ach, wire, card, check, mobile_money)", "ach");
+    try {
+      await authorizedFetch("/finance/bill-pay/disbursements", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          company_id: selectedCompanyId || undefined,
+          bill_id: bill.id,
+          amount: Number(amount),
+          payment_rail: rail || "ach",
+        }),
+      });
+      await loadFinanceWorkspace();
+      setInfoMessage(`Scheduled payment for ${bill.bill_number}.`);
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to schedule bill payment.");
+    }
+  };
+
+  const executeBillDisbursement = async (disbursementId) => {
+    try {
+      await authorizedFetch(`/finance/bill-pay/disbursements/${disbursementId}/execute`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ payment_date: new Date().toISOString().slice(0, 10) }),
+      });
+      await loadFinanceWorkspace();
+      setInfoMessage("Bill payment executed.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to execute bill payment.");
+    }
+  };
+
+  const createReconciliationRuleRecord = async () => {
+    try {
+      await authorizedFetch("/finance/reconciliation/rules", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...reconciliationRuleForm,
+          company_id: selectedCompanyId || undefined,
+          priority: Number(reconciliationRuleForm.priority || 100),
+          min_amount: reconciliationRuleForm.min_amount === "" ? undefined : Number(reconciliationRuleForm.min_amount),
+          max_amount: reconciliationRuleForm.max_amount === "" ? undefined : Number(reconciliationRuleForm.max_amount),
+        }),
+      });
+      setReconciliationRuleForm(createReconciliationRuleState());
+      await loadFinanceWorkspace();
+      setInfoMessage("Reconciliation rule saved.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to save reconciliation rule.");
+    }
+  };
+
+  const autoApplyReconciliationRules = async () => {
+    try {
+      const response = await authorizedFetch("/finance/reconciliation/rules/auto-apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ company_id: selectedCompanyId || undefined }),
+      });
+      await loadFinanceWorkspace();
+      setInfoMessage(`Rules applied: ${response.matched || 0} matched, ${response.exceptions || 0} exception(s).`);
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to auto-apply reconciliation rules.");
+    }
+  };
+
+  const flagReconciliationException = async (transactionId) => {
+    const exceptionType = window.prompt("Exception type", "review_required");
+    if (exceptionType === null) {
+      return;
+    }
+    const notes = window.prompt("Exception notes", "Investigate classification");
+    try {
+      await authorizedFetch("/finance/reconciliation/exceptions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          company_id: selectedCompanyId || undefined,
+          transaction_id: transactionId,
+          exception_type: exceptionType,
+          notes: notes || "",
+        }),
+      });
+      await loadFinanceWorkspace();
+      setInfoMessage("Reconciliation exception logged.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to create reconciliation exception.");
+    }
+  };
+
+  const resolveReconciliationException = async (exceptionId) => {
+    try {
+      await authorizedFetch(`/finance/reconciliation/exceptions/${exceptionId}/resolve`, {
+        method: "POST",
+      });
+      await loadFinanceWorkspace();
+      setInfoMessage("Reconciliation exception resolved.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to resolve reconciliation exception.");
+    }
+  };
+
+  const prepareTaxFilingRecord = async () => {
+    try {
+      await authorizedFetch("/finance/tax/filings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...taxFilingForm,
+          company_id: selectedCompanyId || undefined,
+        }),
+      });
+      setTaxFilingForm(createTaxFilingFormState());
+      await loadFinanceWorkspace();
+      setInfoMessage("Tax filing package prepared.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to prepare tax filing.");
+    }
+  };
+
+  const submitTaxFilingRecord = async (filingId) => {
+    try {
+      await authorizedFetch(`/finance/tax/filings/${filingId}/submit`, {
+        method: "POST",
+      });
+      await loadFinanceWorkspace();
+      setInfoMessage("Tax filing marked as submitted.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to submit tax filing.");
+    }
+  };
+
+  const createEmployeeRecord = async () => {
+    try {
+      await authorizedFetch("/finance/workforce/employees", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...employeeForm,
+          company_id: selectedCompanyId || undefined,
+          hourly_rate: Number(employeeForm.hourly_rate || 0),
+          salary_amount: Number(employeeForm.salary_amount || 0),
+          withholding_rate: Number(employeeForm.withholding_rate || 0),
+          benefit_rate: Number(employeeForm.benefit_rate || 0),
+        }),
+      });
+      setEmployeeForm(createEmployeeFormState());
+      await loadFinanceWorkspace();
+      setInfoMessage("Employee added.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to create employee.");
+    }
+  };
+
+  const createContractorRecord = async () => {
+    try {
+      await authorizedFetch("/finance/workforce/contractors", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...contractorForm,
+          company_id: selectedCompanyId || undefined,
+          default_rate: Number(contractorForm.default_rate || 0),
+        }),
+      });
+      setContractorForm(createContractorFormState());
+      await loadFinanceWorkspace();
+      setInfoMessage("Contractor added.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to create contractor.");
+    }
+  };
+
+  const createTimeEntryRecord = async () => {
+    try {
+      await authorizedFetch("/finance/workforce/time", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...timeEntryForm,
+          company_id: selectedCompanyId || undefined,
+          employee_id: timeEntryForm.employee_id || undefined,
+          contractor_id: timeEntryForm.contractor_id || undefined,
+          project_id: timeEntryForm.project_id || undefined,
+          hours: Number(timeEntryForm.hours || 0),
+          hourly_cost: Number(timeEntryForm.hourly_cost || 0),
+          billable_rate: Number(timeEntryForm.billable_rate || 0),
+        }),
+      });
+      setTimeEntryForm(createTimeEntryFormState());
+      await loadFinanceWorkspace();
+      setInfoMessage("Time entry logged.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to create time entry.");
+    }
+  };
+
+  const createMileageRecord = async () => {
+    try {
+      await authorizedFetch("/finance/workforce/mileage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...mileageForm,
+          company_id: selectedCompanyId || undefined,
+          employee_id: mileageForm.employee_id || undefined,
+          contractor_id: mileageForm.contractor_id || undefined,
+          project_id: mileageForm.project_id || undefined,
+          miles: Number(mileageForm.miles || 0),
+          rate_per_mile: Number(mileageForm.rate_per_mile || 0),
+        }),
+      });
+      setMileageForm(createMileageFormState());
+      await loadFinanceWorkspace();
+      setInfoMessage("Mileage entry logged.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to create mileage entry.");
+    }
+  };
+
+  const processPayrollRun = async () => {
+    const periodStart = window.prompt("Payroll period start (YYYY-MM-DD)", new Date().toISOString().slice(0, 8) + "01");
+    if (periodStart === null) {
+      return;
+    }
+    const periodEnd = window.prompt("Payroll period end (YYYY-MM-DD)", new Date().toISOString().slice(0, 10));
+    if (periodEnd === null) {
+      return;
+    }
+    try {
+      await authorizedFetch("/finance/workforce/payroll-runs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          company_id: selectedCompanyId || undefined,
+          period_start: periodStart,
+          period_end: periodEnd,
+          pay_date: periodEnd,
+        }),
+      });
+      await loadFinanceWorkspace();
+      setInfoMessage("Payroll processed.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to process payroll.");
+    }
+  };
+
+  const createInventoryItemRecord = async () => {
+    try {
+      await authorizedFetch("/finance/inventory/items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...inventoryItemForm,
+          company_id: selectedCompanyId || undefined,
+          quantity_on_hand: Number(inventoryItemForm.quantity_on_hand || 0),
+          reorder_point: Number(inventoryItemForm.reorder_point || 0),
+          reorder_quantity: Number(inventoryItemForm.reorder_quantity || 0),
+          unit_cost: Number(inventoryItemForm.unit_cost || 0),
+          unit_price: Number(inventoryItemForm.unit_price || 0),
+        }),
+      });
+      setInventoryItemForm(createInventoryItemFormState());
+      await loadFinanceWorkspace();
+      setInfoMessage("Inventory item created.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to create inventory item.");
+    }
+  };
+
+  const createPurchaseOrderRecord = async () => {
+    try {
+      await authorizedFetch("/finance/purchase-orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...purchaseOrderForm,
+          company_id: selectedCompanyId || undefined,
+          items: purchaseOrderForm.items.map((item) => ({
+            ...item,
+            quantity: Number(item.quantity || 0),
+            unit_cost: Number(item.unit_cost || 0),
+          })),
+        }),
+      });
+      setPurchaseOrderForm(createPurchaseOrderFormState());
+      await loadFinanceWorkspace();
+      setInfoMessage("Purchase order created.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to create purchase order.");
+    }
+  };
+
+  const submitPurchaseOrderRecord = async (purchaseOrderId) => {
+    try {
+      await authorizedFetch(`/finance/purchase-orders/${purchaseOrderId}/submit`, {
+        method: "POST",
+      });
+      await loadFinanceWorkspace();
+      setInfoMessage("Purchase order submitted.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to submit purchase order.");
+    }
+  };
+
+  const receivePurchaseOrderRecord = async (purchaseOrder) => {
+    try {
+      const items = (purchaseOrder.items || [])
+        .map((item) => ({
+          line_id: item.id,
+          quantity: Math.max(0, Number(item.quantity || 0) - Number(item.received_quantity || 0)),
+        }))
+        .filter((item) => item.quantity > 0);
+      if (!items.length) {
+        setErrorMessage("No outstanding quantities remain on this purchase order.");
+        return;
+      }
+      await authorizedFetch(`/finance/purchase-orders/${purchaseOrder.id}/receive`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      });
+      await loadFinanceWorkspace();
+      setInfoMessage(`Received items for ${purchaseOrder.po_number}.`);
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to receive purchase order.");
+    }
+  };
+
+  const createProjectRecord = async () => {
+    try {
+      await authorizedFetch("/finance/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...projectForm,
+          company_id: selectedCompanyId || undefined,
+          budget_revenue: Number(projectForm.budget_revenue || 0),
+          budget_cost: Number(projectForm.budget_cost || 0),
+        }),
+      });
+      setProjectForm(createProjectFormState());
+      await loadFinanceWorkspace();
+      setInfoMessage("Project created.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to create project.");
+    }
+  };
+
+  const createProjectCostRecord = async () => {
+    try {
+      await authorizedFetch("/finance/projects/costs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...projectCostForm,
+          company_id: selectedCompanyId || undefined,
+          amount: Number(projectCostForm.amount || 0),
+        }),
+      });
+      setProjectCostForm(createProjectCostFormState());
+      await loadFinanceWorkspace();
+      setInfoMessage("Project cost entry posted.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to create project cost entry.");
+    }
+  };
+
+  const connectIntegrationRecord = async () => {
+    try {
+      await authorizedFetch("/finance/integrations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          company_id: selectedCompanyId || undefined,
+          provider: integrationForm.provider,
+          config: { source: "workspace" },
+        }),
+      });
+      await loadFinanceWorkspace();
+      setInfoMessage("Integration connected.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to connect integration.");
+    }
+  };
+
+  const syncIntegrationRecord = async (integrationId) => {
+    try {
+      await authorizedFetch(`/finance/integrations/${integrationId}/sync`, {
+        method: "POST",
+      });
+      await loadFinanceWorkspace();
+      setInfoMessage("Integration sync recorded.");
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to sync integration.");
+    }
+  };
+
+  const { open: openPlaid, ready: plaidReady } = usePlaidLink({
+    token: plaidLinkToken || null,
+    onSuccess: async (publicToken, metadata) => {
+      try {
+        await authorizedFetch("/finance/banking/plaid/exchange-token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            public_token: publicToken,
+            company_id: selectedCompanyId || undefined,
+            institution_name: metadata?.institution?.name || "",
+          }),
+        });
+        await syncPlaidTransactions();
+        setPlaidLinkToken("");
+        setInfoMessage("Bank connected and synced.");
+        setErrorMessage("");
+      } catch (error) {
+        setErrorMessage(error.message || "Failed to exchange Plaid token.");
+      }
+    },
+    onExit: (error) => {
+      if (error?.display_message || error?.error_message) {
+        setErrorMessage(error.display_message || error.error_message);
+      }
+      setPlaidLinkToken("");
+    },
+  });
+
+  const reconcileSuggestion = async (suggestion) => {
+    try {
+      await authorizedFetch("/finance/reconciliation/match", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          transaction_id: suggestion.transaction.id,
+          entity_type: suggestion.entity_type,
+          entity_id: suggestion.entity_id,
+        }),
+      });
+      await loadFinanceWorkspace();
+      setInfoMessage(`Matched bank transaction to ${suggestion.document_number}.`);
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to reconcile bank transaction.");
+    }
   };
 
   const createCompany = async () => {
@@ -1306,6 +2798,12 @@ export default function App() {
     }
   }, [availableQuickEntries, quickEntryId]);
 
+  useEffect(() => {
+    if (plaidLinkToken && plaidReady) {
+      openPlaid();
+    }
+  }, [plaidLinkToken, plaidReady, openPlaid]);
+
   const themedStyles = useMemo(() => {
     if (!isDarkMode) {
       return styles;
@@ -1339,6 +2837,18 @@ export default function App() {
       sidebarMeta: { ...styles.sidebarMeta, color: "#93c5fd" },
       main: { ...styles.main, background: "#111827", color: "#e5e7eb" },
       card: { ...styles.card, background: "#1f2937", color: "#e5e7eb", boxShadow: "0 8px 20px rgba(0,0,0,0.3)" },
+      heroCard: { ...styles.heroCard, background: "linear-gradient(145deg, #020617 0%, #0f766e 45%, #164e63 120%)" },
+      heroMetricCard: {
+        ...styles.heroMetricCard,
+        background: "rgba(15, 23, 42, 0.42)",
+        border: "1px solid rgba(148, 163, 184, 0.18)",
+      },
+      secondaryActionButton: {
+        ...styles.secondaryActionButton,
+        background: "rgba(15, 23, 42, 0.68)",
+        color: "#e2e8f0",
+        border: "1px solid #334155",
+      },
       input: { ...styles.input, background: "#0f172a", color: "#e5e7eb", border: "1px solid #334155" },
       button: { ...styles.button, background: "#2563eb", color: "#ffffff" },
       secondaryButton: { ...styles.secondaryButton, border: "1px solid #60a5fa", color: "#e2e8f0" },
@@ -1355,6 +2865,27 @@ export default function App() {
       kpiItem: { ...styles.kpiItem, background: "#0f172a", border: "1px solid #334155", color: "#e2e8f0" },
       activityItem: { ...styles.activityItem, borderBottom: "1px solid #334155" },
       activityTime: { ...styles.activityTime, color: "#93c5fd" },
+      modulePanel: { ...styles.modulePanel, background: "#0f172a", border: "1px solid #334155" },
+      moduleTitle: { ...styles.moduleTitle, color: "#e2e8f0" },
+      integrationBanner: { ...styles.integrationBanner, background: "#0f2f2f", border: "1px solid #115e59", color: "#d1fae5" },
+      connectionCard: { ...styles.connectionCard, background: "#0f172a", border: "1px solid #334155" },
+      statusPill: { ...styles.statusPill, background: "#164e63", color: "#ccfbf1" },
+      reconciliationItem: { ...styles.reconciliationItem, background: "#0f172a", border: "1px solid #334155" },
+      scoreBadge: { ...styles.scoreBadge, background: "#0f766e", color: "#ecfeff" },
+      alertCritical: { ...styles.alertCritical, background: "#3f1d2e", borderColor: "#7f1d1d", color: "#fecdd3" },
+      alertWarning: { ...styles.alertWarning, background: "#3b2a15", borderColor: "#92400e", color: "#fed7aa" },
+      alertPositive: { ...styles.alertPositive, background: "#0f2f2f", borderColor: "#115e59", color: "#99f6e4" },
+      alertPill: { ...styles.alertPill, background: "rgba(15, 23, 42, 0.55)" },
+      signalPositive: { ...styles.signalPositive, background: "#052e2b", borderColor: "#115e59", color: "#99f6e4" },
+      signalWarning: { ...styles.signalWarning, background: "#422006", borderColor: "#92400e", color: "#fde68a" },
+      signalCritical: { ...styles.signalCritical, background: "#3f1d2e", borderColor: "#7f1d1d", color: "#fecdd3" },
+      presetButton: { ...styles.presetButton, background: "#0f172a", color: "#ccfbf1", border: "1px solid #115e59" },
+      narrativeCard: {
+        ...styles.narrativeCard,
+        background: "linear-gradient(135deg, #0f172a 0%, #13343a 100%)",
+        border: "1px solid #115e59",
+        color: "#d1fae5",
+      },
     };
   }, [isDarkMode]);
 
@@ -1371,7 +2902,6 @@ export default function App() {
         await loadCompanies(me?.default_company_id);
         await Promise.all([
           loadStats(),
-          loadDashboardStats(),
           loadLiveUserCount(),
           loadRecentActivity(),
           pingSession(),
@@ -1404,18 +2934,46 @@ export default function App() {
   }, [token]);
 
   useEffect(() => {
-    if (!selectedCompanyId || !companies.length) {
-      return;
-    }
-
-    const selectedCompany = companies.find((company) => String(company.id) === String(selectedCompanyId));
     if (!selectedCompany) {
+      setWorkspaceReady(false);
       return;
     }
 
-    setBusinessType(selectedCompany.business_type || "sole_proprietor");
-    loadDashboardStats();
-  }, [selectedCompanyId, companies]);
+    setWorkspaceReady(false);
+    const savedWorkspace = readStoredWorkspace(selectedCompany.id);
+    const nextBusinessType = savedWorkspace?.businessType || selectedCompany.business_type || "sole_proprietor";
+    setBusinessType(nextBusinessType);
+    setLedgerRows(normalizeLedgerRows(savedWorkspace?.ledgerRows, nextBusinessType));
+    setBudgetTargets(savedWorkspace?.budgetTargets || INITIAL_BUDGET_TARGETS);
+    setManufacturingInputs(savedWorkspace?.manufacturingInputs || INITIAL_MANUFACTURING_INPUTS);
+    setPartners(normalizePartners(savedWorkspace?.partners));
+    setScenarioInputs(savedWorkspace?.scenarioInputs || INITIAL_SCENARIO_INPUTS);
+    setWorkspaceReady(true);
+    loadDashboardStats(selectedCompany.id).catch(() => {});
+    loadFinanceWorkspace(selectedCompany.id).catch(() => {});
+  }, [selectedCompany]);
+
+  useEffect(() => {
+    if (!selectedCompanyId || !token || !selectedRegisterAccountId) {
+      return;
+    }
+    loadAccountRegister(selectedCompanyId, selectedRegisterAccountId).catch(() => {});
+  }, [selectedRegisterAccountId]);
+
+  useEffect(() => {
+    if (!selectedCompanyId || !token || !workspaceReady) {
+      return;
+    }
+
+    persistWorkspace(selectedCompanyId, {
+      businessType,
+      ledgerRows,
+      budgetTargets,
+      manufacturingInputs,
+      partners,
+      scenarioInputs,
+    });
+  }, [selectedCompanyId, token, workspaceReady, businessType, ledgerRows, budgetTargets, manufacturingInputs, partners, scenarioInputs]);
 
   if (!token) {
     return (
@@ -1594,6 +3152,49 @@ export default function App() {
         {errorMessage ? <p style={themedStyles.errorText}>{errorMessage}</p> : null}
         {infoMessage ? <p style={themedStyles.infoText}>{infoMessage}</p> : null}
 
+        <div style={themedStyles.heroCard}>
+          <div style={themedStyles.heroHeader}>
+            <div>
+              <p style={themedStyles.eyebrow}>Finance Control Tower</p>
+              <h2 style={themedStyles.heroTitle}>
+                {selectedCompany?.name || "Main Company"} is running at a{" "}
+                <span style={themedStyles.heroAccent}>{executiveMetrics.healthScore}/100</span> financial health score.
+              </h2>
+              <p style={themedStyles.heroSubtitle}>
+                This workspace now keeps company-specific inputs, gives you a board-style narrative, and stress-tests the next six months of cash, collections, and operating pressure.
+              </p>
+            </div>
+            <div style={themedStyles.heroActions}>
+              <button onClick={exportExecutiveSummary} style={themedStyles.button}>Export Summary CSV</button>
+              <button onClick={exportWorkspace} style={themedStyles.secondaryActionButton}>Export Workspace JSON</button>
+            </div>
+          </div>
+          <div style={themedStyles.heroMetricsGrid}>
+            <div style={themedStyles.heroMetricCard}>
+              <span style={themedStyles.metricLabel}>Net Margin</span>
+              <strong style={themedStyles.metricValue}>{formatPercent(executiveMetrics.netMargin)}</strong>
+              <span style={themedStyles.metricHelper}>After-tax profitability</span>
+            </div>
+            <div style={themedStyles.heroMetricCard}>
+              <span style={themedStyles.metricLabel}>Current Ratio</span>
+              <strong style={themedStyles.metricValue}>{executiveMetrics.currentRatio.toFixed(2)}x</strong>
+              <span style={themedStyles.metricHelper}>Liquidity coverage</span>
+            </div>
+            <div style={themedStyles.heroMetricCard}>
+              <span style={themedStyles.metricLabel}>Cash Runway</span>
+              <strong style={themedStyles.metricValue}>
+                {executiveMetrics.cashRunwayMonths ? `${executiveMetrics.cashRunwayMonths.toFixed(1)} mo` : "N/A"}
+              </strong>
+              <span style={themedStyles.metricHelper}>Based on current expense run rate</span>
+            </div>
+            <div style={themedStyles.heroMetricCard}>
+              <span style={themedStyles.metricLabel}>Active Users</span>
+              <strong style={themedStyles.metricValue}>{executiveMetrics.activeUsers}</strong>
+              <span style={themedStyles.metricHelper}>Live across the organization</span>
+            </div>
+          </div>
+        </div>
+
         <div style={themedStyles.liveUserCard}>
           <h3>Live Online Users</h3>
           <div style={themedStyles.userCountDisplay}>
@@ -1628,6 +3229,1528 @@ export default function App() {
             <div style={themedStyles.kpiItem}>Expenses: {formatMoney(dashboardStats?.expenses || 0)}</div>
             <div style={themedStyles.kpiItem}>Profit: {formatMoney(dashboardStats?.profit || 0)}</div>
             <div style={themedStyles.kpiItem}>Inventory: {formatMoney(dashboardStats?.inventory_value || 0)}</div>
+          </div>
+        </div>
+
+        <div style={themedStyles.card}>
+          <div style={themedStyles.statementHeader}>
+            <div>
+              <h3>Financial Health Scorecard</h3>
+              <p style={themedStyles.graphNote}>A quick-read operating view modeled after CFO dashboards and investor update packs.</p>
+            </div>
+            <div style={themedStyles.scoreBadge}>{executiveMetrics.healthScore}/100</div>
+          </div>
+          <div style={themedStyles.kpiGrid}>
+            <div style={themedStyles.kpiItem}>
+              <strong>Gross Margin</strong>
+              <div>{formatPercent(executiveMetrics.grossMargin)}</div>
+              <div>Revenue retained after direct cost.</div>
+            </div>
+            <div style={themedStyles.kpiItem}>
+              <strong>Quick Ratio</strong>
+              <div>{executiveMetrics.quickRatio.toFixed(2)}x</div>
+              <div>Cash + receivables vs current liabilities.</div>
+            </div>
+            <div style={themedStyles.kpiItem}>
+              <strong>Debt to Equity</strong>
+              <div>{executiveMetrics.debtToEquity.toFixed(2)}x</div>
+              <div>Capital structure pressure.</div>
+            </div>
+            <div style={themedStyles.kpiItem}>
+              <strong>Working Capital</strong>
+              <div>{formatMoney(executiveMetrics.workingCapital)}</div>
+              <div>Short-term operating buffer.</div>
+            </div>
+          </div>
+        </div>
+
+        <div style={themedStyles.card}>
+          <div style={themedStyles.statementHeader}>
+            <div>
+              <h3>Operating Alerts</h3>
+              <p style={themedStyles.graphNote}>Focused next actions so the product behaves more like a finance copilot than a passive report viewer.</p>
+            </div>
+          </div>
+          <div style={themedStyles.alertGrid}>
+            {financeAlerts.map((alert, index) => (
+              <div
+                key={`${alert.title}-${index}`}
+                style={{
+                  ...themedStyles.alertCard,
+                  ...(alert.severity === "critical"
+                    ? themedStyles.alertCritical
+                    : alert.severity === "warning"
+                      ? themedStyles.alertWarning
+                      : themedStyles.alertPositive),
+                }}
+              >
+                <span style={themedStyles.alertPill}>{alert.severity.toUpperCase()}</span>
+                <strong>{alert.title}</strong>
+                <p style={themedStyles.alertText}>{alert.detail}</p>
+                <p style={themedStyles.alertAction}>{alert.action}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div style={themedStyles.card}>
+          <div style={themedStyles.statementHeader}>
+            <div>
+              <h3>Working Capital Cockpit</h3>
+              <p style={themedStyles.graphNote}>Receivables, payables, stock, and operating cash pressure in one place.</p>
+            </div>
+            <button onClick={exportLedger} style={themedStyles.secondaryActionButton}>Export Ledger CSV</button>
+          </div>
+          <div style={themedStyles.signalGrid}>
+            {operatingSignals.map((signal) => (
+              <div
+                key={signal.label}
+                style={{
+                  ...themedStyles.signalCard,
+                  ...(signal.tone === "positive"
+                    ? themedStyles.signalPositive
+                    : signal.tone === "warning"
+                      ? themedStyles.signalWarning
+                      : themedStyles.signalCritical),
+                }}
+              >
+                <span style={themedStyles.metricLabel}>{signal.label}</span>
+                <strong style={themedStyles.metricValue}>
+                  {signal.format === "percent"
+                    ? formatPercent(signal.value)
+                    : signal.format === "ratio"
+                      ? `${signal.value.toFixed(2)}x`
+                      : formatMoney(signal.value)}
+                </strong>
+                <span style={themedStyles.metricHelper}>{signal.description}</span>
+              </div>
+            ))}
+          </div>
+          <div style={themedStyles.kpiGrid}>
+            <div style={themedStyles.kpiItem}>
+              <strong>Cash</strong>
+              <div>{formatMoney(statement.cashBalance)}</div>
+            </div>
+            <div style={themedStyles.kpiItem}>
+              <strong>Accounts Receivable</strong>
+              <div>{formatMoney(statement.receivablesBalance)}</div>
+            </div>
+            <div style={themedStyles.kpiItem}>
+              <strong>Accounts Payable</strong>
+              <div>{formatMoney(statement.payablesBalance)}</div>
+            </div>
+            <div style={themedStyles.kpiItem}>
+              <strong>Inventory</strong>
+              <div>{formatMoney(statement.inventoryBalance)}</div>
+            </div>
+          </div>
+        </div>
+
+        <div style={themedStyles.card}>
+          <div style={themedStyles.statementHeader}>
+            <div>
+              <h3>Scenario Planner</h3>
+              <p style={themedStyles.graphNote}>Pressure-test the next six months using growth, collections, stock, and capex assumptions.</p>
+            </div>
+          </div>
+          <div style={themedStyles.presetRow}>
+            {SCENARIO_PRESETS.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                onClick={() => applyScenarioPreset(preset.id)}
+                style={themedStyles.presetButton}
+                title={preset.description}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+          <div style={themedStyles.budgetGrid}>
+            <label style={themedStyles.budgetField}>
+              Revenue Growth %
+              <input
+                type="number"
+                step="0.1"
+                value={scenarioInputs.revenueGrowth}
+                onChange={(event) => updateScenarioInput("revenueGrowth", event.target.value)}
+                style={themedStyles.tableInput}
+              />
+            </label>
+            <label style={themedStyles.budgetField}>
+              Expense Growth %
+              <input
+                type="number"
+                step="0.1"
+                value={scenarioInputs.expenseGrowth}
+                onChange={(event) => updateScenarioInput("expenseGrowth", event.target.value)}
+                style={themedStyles.tableInput}
+              />
+            </label>
+            <label style={themedStyles.budgetField}>
+              Collections Drag %
+              <input
+                type="number"
+                step="0.1"
+                value={scenarioInputs.collectionsDrag}
+                onChange={(event) => updateScenarioInput("collectionsDrag", event.target.value)}
+                style={themedStyles.tableInput}
+              />
+            </label>
+            <label style={themedStyles.budgetField}>
+              Inventory Shock %
+              <input
+                type="number"
+                step="0.1"
+                value={scenarioInputs.inventoryShock}
+                onChange={(event) => updateScenarioInput("inventoryShock", event.target.value)}
+                style={themedStyles.tableInput}
+              />
+            </label>
+            <label style={themedStyles.budgetField}>
+              Month 1 Capex
+              <input
+                type="number"
+                step="0.01"
+                value={scenarioInputs.capexPlan}
+                onChange={(event) => updateScenarioInput("capexPlan", event.target.value)}
+                style={themedStyles.tableInput}
+              />
+            </label>
+          </div>
+          <div style={themedStyles.chartWrap}>
+            <ResponsiveContainer width="100%" height={320}>
+              <LineChart data={forecastModel.data}>
+                <CartesianGrid strokeDasharray="3 3" stroke={isDarkMode ? "#334155" : "#dbeafe"} />
+                <XAxis dataKey="month" />
+                <YAxis />
+                <Tooltip formatter={(value) => formatMoney(Number(value))} />
+                <Legend />
+                <Line type="monotone" dataKey="revenue" stroke="#0f766e" strokeWidth={3} dot={false} />
+                <Line type="monotone" dataKey="expense" stroke="#dc2626" strokeWidth={3} dot={false} />
+                <Line type="monotone" dataKey="cash" stroke="#1d4ed8" strokeWidth={3} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+          <div style={themedStyles.kpiGrid}>
+            <div style={themedStyles.kpiItem}>
+              <strong>Ending Cash</strong>
+              <div>{formatMoney(forecastModel.summary.endingCash)}</div>
+            </div>
+            <div style={themedStyles.kpiItem}>
+              <strong>Lowest Cash Point</strong>
+              <div>{formatMoney(forecastModel.summary.lowestCash)}</div>
+            </div>
+            <div style={themedStyles.kpiItem}>
+              <strong>Financing Need</strong>
+              <div>{formatMoney(forecastModel.summary.financingNeed)}</div>
+            </div>
+            <div style={themedStyles.kpiItem}>
+              <strong>Peak Monthly Revenue</strong>
+              <div>{formatMoney(forecastModel.summary.peakRevenueMonth)}</div>
+            </div>
+          </div>
+        </div>
+
+        <div style={themedStyles.card}>
+          <div style={themedStyles.statementHeader}>
+            <div>
+              <h3>Board Narrative</h3>
+              <p style={themedStyles.graphNote}>A ready-to-share summary that turns the numbers into an executive storyline.</p>
+            </div>
+          </div>
+          <div style={themedStyles.narrativeCard}>{boardNarrative}</div>
+          <p style={themedStyles.updateIndicator}>
+            Company workspaces now auto-save locally, so each company can keep its own inputs, budget targets, partners, and scenario assumptions.
+          </p>
+        </div>
+
+        <div style={themedStyles.card}>
+          <div style={themedStyles.statementHeader}>
+            <div>
+              <h3>Finance Operations Hub</h3>
+              <p style={themedStyles.graphNote}>
+                Deeper workflows for receivables, payables, banking, reconciliation, and tax live here for {selectedCompany?.name || "the active company"}.
+              </p>
+            </div>
+            {financeLoading ? <span style={themedStyles.updateIndicator}>Refreshing finance workspace...</span> : null}
+          </div>
+          <div style={themedStyles.kpiGrid}>
+            <div style={themedStyles.kpiItem}>
+              <strong>Open Receivables</strong>
+              <div>{formatMoney(financeSummary?.open_receivables || 0)}</div>
+              <div>Overdue: {formatMoney(financeSummary?.overdue_receivables || 0)}</div>
+            </div>
+            <div style={themedStyles.kpiItem}>
+              <strong>Open Payables</strong>
+              <div>{formatMoney(financeSummary?.open_payables || 0)}</div>
+              <div>Overdue: {formatMoney(financeSummary?.overdue_payables || 0)}</div>
+            </div>
+            <div style={themedStyles.kpiItem}>
+              <strong>Collections This Month</strong>
+              <div>{formatMoney(financeSummary?.collected_this_month || 0)}</div>
+              <div>Receipts posted against invoices.</div>
+            </div>
+            <div style={themedStyles.kpiItem}>
+              <strong>Disbursements This Month</strong>
+              <div>{formatMoney(financeSummary?.paid_this_month || 0)}</div>
+              <div>Payments posted against vendor bills.</div>
+            </div>
+            <div style={themedStyles.kpiItem}>
+              <strong>Unmatched Bank Items</strong>
+              <div>{financeSummary?.bank_unmatched_count || 0}</div>
+              <div>Ready for reconciliation.</div>
+            </div>
+            <div style={themedStyles.kpiItem}>
+              <strong>Net Tax Due</strong>
+              <div>{formatMoney(financeSummary?.net_tax_due || 0)}</div>
+              <div>Sales tax less purchase tax credit.</div>
+            </div>
+          </div>
+          <div style={themedStyles.moduleGrid}>
+            <div style={themedStyles.modulePanel}>
+              <h4 style={themedStyles.moduleTitle}>Receivables Aging</h4>
+              <div style={themedStyles.kpiGrid}>
+                {Object.entries(receivablesData?.buckets || {}).map(([bucket, value]) => (
+                  <div key={bucket} style={themedStyles.kpiItem}>
+                    <strong>{bucket.replaceAll("_", " ")}</strong>
+                    <div>{formatMoney(value)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={themedStyles.modulePanel}>
+              <h4 style={themedStyles.moduleTitle}>Payables Aging</h4>
+              <div style={themedStyles.kpiGrid}>
+                {Object.entries(payablesData?.buckets || {}).map(([bucket, value]) => (
+                  <div key={bucket} style={themedStyles.kpiItem}>
+                    <strong>{bucket.replaceAll("_", " ")}</strong>
+                    <div>{formatMoney(value)}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style={themedStyles.card}>
+          <div style={themedStyles.statementHeader}>
+            <div>
+              <h3>Invoicing Workflow</h3>
+              <p style={themedStyles.graphNote}>Create customer invoices, send them into the workflow, and record cash collection against open balances.</p>
+            </div>
+          </div>
+          <div style={themedStyles.moduleGrid}>
+            <div style={themedStyles.modulePanel}>
+              <h4 style={themedStyles.moduleTitle}>Create Invoice</h4>
+              <div style={themedStyles.adminCreateGrid}>
+                <input
+                  placeholder="Customer name"
+                  value={invoiceForm.customer_name}
+                  onChange={(event) => updateInvoiceFormField("customer_name", event.target.value)}
+                  style={themedStyles.tableInput}
+                />
+                <input
+                  placeholder="Customer email"
+                  value={invoiceForm.customer_email}
+                  onChange={(event) => updateInvoiceFormField("customer_email", event.target.value)}
+                  style={themedStyles.tableInput}
+                />
+                <input
+                  type="date"
+                  value={invoiceForm.due_date}
+                  onChange={(event) => updateInvoiceFormField("due_date", event.target.value)}
+                  style={themedStyles.tableInput}
+                />
+                <input
+                  type="number"
+                  step="0.01"
+                  value={invoiceForm.tax_rate}
+                  onChange={(event) => updateInvoiceFormField("tax_rate", event.target.value)}
+                  style={themedStyles.tableInput}
+                  placeholder="Tax rate %"
+                />
+                <select
+                  value={invoiceForm.status}
+                  onChange={(event) => updateInvoiceFormField("status", event.target.value)}
+                  style={themedStyles.tableInput}
+                >
+                  <option value="draft">draft</option>
+                  <option value="sent">sent</option>
+                </select>
+                <input
+                  placeholder="Notes"
+                  value={invoiceForm.notes}
+                  onChange={(event) => updateInvoiceFormField("notes", event.target.value)}
+                  style={themedStyles.tableInput}
+                />
+              </div>
+              <div style={themedStyles.documentLineList}>
+                {invoiceForm.items.map((item, index) => (
+                  <div key={`invoice-item-${index}`} style={themedStyles.documentLineRow}>
+                    <input
+                      placeholder="Description"
+                      value={item.description}
+                      onChange={(event) => updateDocumentItem(setInvoiceForm, index, "description", event.target.value)}
+                      style={themedStyles.tableInput}
+                    />
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      placeholder="Qty"
+                      value={item.quantity}
+                      onChange={(event) => updateDocumentItem(setInvoiceForm, index, "quantity", event.target.value)}
+                      style={themedStyles.tableInput}
+                    />
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      placeholder="Unit price"
+                      value={item.unit_price}
+                      onChange={(event) => updateDocumentItem(setInvoiceForm, index, "unit_price", event.target.value)}
+                      style={themedStyles.tableInput}
+                    />
+                    <button type="button" onClick={() => removeDocumentItem(setInvoiceForm, index)} style={themedStyles.deleteButton}>
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div style={themedStyles.actionRow}>
+                <button type="button" onClick={() => addDocumentItem(setInvoiceForm)} style={themedStyles.secondaryActionButton}>Add Line</button>
+                <button type="button" onClick={createInvoiceRecord} style={themedStyles.button} disabled={!canManageFinanceOps}>
+                  Create Invoice
+                </button>
+              </div>
+            </div>
+            <div style={themedStyles.modulePanel}>
+              <h4 style={themedStyles.moduleTitle}>Invoice Pipeline</h4>
+              <div style={themedStyles.tableWrap}>
+                <table style={themedStyles.table}>
+                  <thead>
+                    <tr>
+                      <th style={themedStyles.th}>Invoice</th>
+                      <th style={themedStyles.th}>Customer</th>
+                      <th style={themedStyles.th}>Status</th>
+                      <th style={themedStyles.th}>Total</th>
+                      <th style={themedStyles.th}>Balance</th>
+                      <th style={themedStyles.th}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invoices.slice(0, 8).map((invoice) => (
+                      <tr key={invoice.id}>
+                        <td style={themedStyles.td}>
+                          <strong>{invoice.invoice_number}</strong>
+                          <div style={themedStyles.updateIndicator}>{invoice.due_date || "No due date"}</div>
+                        </td>
+                        <td style={themedStyles.td}>{invoice.customer_name}</td>
+                        <td style={themedStyles.td}>
+                          <span style={themedStyles.statusPill}>{invoice.status}</span>
+                        </td>
+                        <td style={themedStyles.td}>{formatMoney(invoice.total_amount)}</td>
+                        <td style={themedStyles.td}>{formatMoney(invoice.balance_due)}</td>
+                        <td style={themedStyles.td}>
+                          <div style={themedStyles.actionRow}>
+                            {invoice.status === "draft" ? (
+                              <button type="button" onClick={() => updateInvoiceWorkflowStatus(invoice.id, "sent")} style={themedStyles.button} disabled={!canManageFinanceOps}>
+                                Send
+                              </button>
+                            ) : null}
+                            {invoice.balance_due > 0 ? (
+                              <button type="button" onClick={() => promptAndRecordInvoicePayment(invoice)} style={themedStyles.secondaryActionButton} disabled={!canManageFinanceOps}>
+                                Record Payment
+                              </button>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style={themedStyles.card}>
+          <div style={themedStyles.statementHeader}>
+            <div>
+              <h3>AP Lifecycle Automation</h3>
+              <p style={themedStyles.graphNote}>Capture vendor bills, approve them, and post disbursements against open balances.</p>
+            </div>
+          </div>
+          <div style={themedStyles.moduleGrid}>
+            <div style={themedStyles.modulePanel}>
+              <h4 style={themedStyles.moduleTitle}>Create Vendor Bill</h4>
+              <div style={themedStyles.adminCreateGrid}>
+                <input
+                  placeholder="Vendor name"
+                  value={billForm.vendor_name}
+                  onChange={(event) => updateBillFormField("vendor_name", event.target.value)}
+                  style={themedStyles.tableInput}
+                />
+                <input
+                  type="date"
+                  value={billForm.due_date}
+                  onChange={(event) => updateBillFormField("due_date", event.target.value)}
+                  style={themedStyles.tableInput}
+                />
+                <input
+                  type="number"
+                  step="0.01"
+                  value={billForm.tax_rate}
+                  onChange={(event) => updateBillFormField("tax_rate", event.target.value)}
+                  style={themedStyles.tableInput}
+                  placeholder="Tax rate %"
+                />
+                <select
+                  value={billForm.status}
+                  onChange={(event) => updateBillFormField("status", event.target.value)}
+                  style={themedStyles.tableInput}
+                >
+                  <option value="draft">draft</option>
+                  <option value="approved">approved</option>
+                </select>
+                <input
+                  placeholder="Notes"
+                  value={billForm.notes}
+                  onChange={(event) => updateBillFormField("notes", event.target.value)}
+                  style={themedStyles.tableInput}
+                />
+              </div>
+              <div style={themedStyles.documentLineList}>
+                {billForm.items.map((item, index) => (
+                  <div key={`bill-item-${index}`} style={themedStyles.documentLineRow}>
+                    <input
+                      placeholder="Description"
+                      value={item.description}
+                      onChange={(event) => updateDocumentItem(setBillForm, index, "description", event.target.value)}
+                      style={themedStyles.tableInput}
+                    />
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      placeholder="Qty"
+                      value={item.quantity}
+                      onChange={(event) => updateDocumentItem(setBillForm, index, "quantity", event.target.value)}
+                      style={themedStyles.tableInput}
+                    />
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      placeholder="Unit price"
+                      value={item.unit_price}
+                      onChange={(event) => updateDocumentItem(setBillForm, index, "unit_price", event.target.value)}
+                      style={themedStyles.tableInput}
+                    />
+                    <button type="button" onClick={() => removeDocumentItem(setBillForm, index)} style={themedStyles.deleteButton}>
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div style={themedStyles.actionRow}>
+                <button type="button" onClick={() => addDocumentItem(setBillForm)} style={themedStyles.secondaryActionButton}>Add Line</button>
+                <button type="button" onClick={createBillRecord} style={themedStyles.button} disabled={!canManagePayables}>
+                  Create Bill
+                </button>
+              </div>
+            </div>
+            <div style={themedStyles.modulePanel}>
+              <h4 style={themedStyles.moduleTitle}>Vendor Bill Queue</h4>
+              <div style={themedStyles.tableWrap}>
+                <table style={themedStyles.table}>
+                  <thead>
+                    <tr>
+                      <th style={themedStyles.th}>Bill</th>
+                      <th style={themedStyles.th}>Vendor</th>
+                      <th style={themedStyles.th}>Status</th>
+                      <th style={themedStyles.th}>Total</th>
+                      <th style={themedStyles.th}>Balance</th>
+                      <th style={themedStyles.th}>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bills.slice(0, 8).map((bill) => (
+                      <tr key={bill.id}>
+                        <td style={themedStyles.td}>
+                          <strong>{bill.bill_number}</strong>
+                          <div style={themedStyles.updateIndicator}>{bill.due_date || "No due date"}</div>
+                        </td>
+                        <td style={themedStyles.td}>{bill.vendor_name}</td>
+                        <td style={themedStyles.td}>
+                          <span style={themedStyles.statusPill}>{bill.status}</span>
+                        </td>
+                        <td style={themedStyles.td}>{formatMoney(bill.total_amount)}</td>
+                        <td style={themedStyles.td}>{formatMoney(bill.balance_due)}</td>
+                        <td style={themedStyles.td}>
+                          <div style={themedStyles.actionRow}>
+                            {bill.status === "draft" ? (
+                              <button type="button" onClick={() => updateBillWorkflowStatus(bill.id, "approved")} style={themedStyles.button} disabled={!canManagePayables}>
+                                Approve
+                              </button>
+                            ) : null}
+                            {bill.balance_due > 0 ? (
+                              <button type="button" onClick={() => promptAndRecordBillPayment(bill)} style={themedStyles.secondaryActionButton} disabled={!canManagePayables}>
+                                Record Payment
+                              </button>
+                            ) : null}
+                            {bill.balance_due > 0 ? (
+                              <button type="button" onClick={() => scheduleBillDisbursement(bill)} style={themedStyles.secondaryActionButton} disabled={!canManagePayables}>
+                                Schedule Rail
+                              </button>
+                            ) : null}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style={themedStyles.card}>
+          <div style={themedStyles.statementHeader}>
+            <div>
+              <h3>Bank Feeds and Reconciliation</h3>
+              <p style={themedStyles.graphNote}>Import bank activity, then clear it against invoices and bills with reconciliation suggestions.</p>
+            </div>
+          </div>
+          <div style={themedStyles.moduleGrid}>
+            <div style={themedStyles.modulePanel}>
+              <h4 style={themedStyles.moduleTitle}>Import Bank Feed</h4>
+              <div style={themedStyles.integrationBanner}>
+                <strong>Plaid Direct Connection</strong>
+                <div style={themedStyles.updateIndicator}>
+                  {bankingProviders?.plaid?.enabled
+                    ? `Enabled (${bankingProviders?.plaid?.environment || "sandbox"})`
+                    : "Not configured. File import remains available until PLAID_CLIENT_ID and PLAID_SECRET are set."}
+                </div>
+                <div style={themedStyles.actionRow}>
+                  <button
+                    type="button"
+                    onClick={createPlaidLinkToken}
+                    style={themedStyles.button}
+                    disabled={!canManagePayables || !bankingProviders?.plaid?.enabled}
+                  >
+                    Connect Bank
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => syncPlaidTransactions()}
+                    style={themedStyles.secondaryActionButton}
+                    disabled={!canManagePayables || !bankConnections.length}
+                  >
+                    Sync Connected Bank
+                  </button>
+                </div>
+              </div>
+              {bankConnections.length ? (
+                <div style={themedStyles.connectionList}>
+                  {bankConnections.map((connection) => (
+                    <div key={connection.id} style={themedStyles.connectionCard}>
+                      <strong>{connection.institution_name}</strong>
+                      <div style={themedStyles.updateIndicator}>{connection.status}</div>
+                      <button
+                        type="button"
+                        onClick={() => syncPlaidTransactions(connection.id)}
+                        style={themedStyles.secondaryActionButton}
+                        disabled={!canManagePayables}
+                      >
+                        Sync
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              <input
+                type="file"
+                accept=".csv,.txt,.json,.xls,.xlsx"
+                onChange={(event) => setBankFeedFile(event.target.files?.[0] || null)}
+              />
+              <p style={themedStyles.graphNote}>Accepted columns: date, description, amount, reference or debit/credit pairs.</p>
+              <div style={themedStyles.actionRow}>
+                <button type="button" onClick={importBankFeed} style={themedStyles.button} disabled={!canManagePayables}>
+                  Import Feed
+                </button>
+              </div>
+              {bankFeedFile ? <p style={themedStyles.updateIndicator}>Selected: {bankFeedFile.name}</p> : null}
+              <div style={themedStyles.tableWrap}>
+                <table style={themedStyles.table}>
+                  <thead>
+                    <tr>
+                      <th style={themedStyles.th}>Date</th>
+                      <th style={themedStyles.th}>Description</th>
+                      <th style={themedStyles.th}>Direction</th>
+                      <th style={themedStyles.th}>Amount</th>
+                      <th style={themedStyles.th}>Status</th>
+                      <th style={themedStyles.th}>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {bankTransactions.slice(0, 8).map((transaction) => (
+                      <tr key={transaction.id}>
+                        <td style={themedStyles.td}>{transaction.posted_at}</td>
+                        <td style={themedStyles.td}>{transaction.description}</td>
+                        <td style={themedStyles.td}>{transaction.direction}</td>
+                        <td style={themedStyles.td}>{formatMoney(transaction.absolute_amount)}</td>
+                        <td style={themedStyles.td}><span style={themedStyles.statusPill}>{transaction.status}</span></td>
+                        <td style={themedStyles.td}>
+                          {transaction.status !== "matched" ? (
+                            <button type="button" onClick={() => flagReconciliationException(transaction.id)} style={themedStyles.secondaryActionButton} disabled={!canManagePayables}>
+                              Flag Exception
+                            </button>
+                          ) : (
+                            <span style={themedStyles.updateIndicator}>Cleared</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div style={themedStyles.modulePanel}>
+              <h4 style={themedStyles.moduleTitle}>Reconciliation Suggestions</h4>
+              {reconciliationItems.length ? (
+                <div style={themedStyles.reconciliationList}>
+                  {reconciliationItems.map((suggestion) => (
+                    <div key={`${suggestion.transaction.id}-${suggestion.entity_type}`} style={themedStyles.reconciliationItem}>
+                      <div>
+                        <strong>{suggestion.document_number}</strong>
+                        <div style={themedStyles.updateIndicator}>
+                          {suggestion.counterparty} • Confidence {(suggestion.confidence * 100).toFixed(0)}%
+                        </div>
+                        <div style={themedStyles.updateIndicator}>
+                          {suggestion.transaction.description} • {formatMoney(suggestion.transaction.absolute_amount)}
+                        </div>
+                      </div>
+                      <button type="button" onClick={() => reconcileSuggestion(suggestion)} style={themedStyles.button} disabled={!canManagePayables}>
+                        Match
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p style={themedStyles.updateIndicator}>No reconciliation suggestions right now.</p>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div style={themedStyles.card}>
+          <div style={themedStyles.statementHeader}>
+            <div>
+              <h3>Tax Center</h3>
+              <p style={themedStyles.graphNote}>Track indirect tax, set company tax profile defaults, and preview filing-period totals.</p>
+            </div>
+          </div>
+          <div style={themedStyles.moduleGrid}>
+            <div style={themedStyles.modulePanel}>
+              <h4 style={themedStyles.moduleTitle}>Tax Profile</h4>
+              <div style={themedStyles.adminCreateGrid}>
+                <input
+                  placeholder="Jurisdiction code"
+                  value={taxProfile.jurisdiction_code}
+                  onChange={(event) => updateTaxProfileField("jurisdiction_code", event.target.value)}
+                  style={themedStyles.tableInput}
+                />
+                <select
+                  value={taxProfile.filing_frequency}
+                  onChange={(event) => updateTaxProfileField("filing_frequency", event.target.value)}
+                  style={themedStyles.tableInput}
+                >
+                  <option value="monthly">monthly</option>
+                  <option value="quarterly">quarterly</option>
+                  <option value="annual">annual</option>
+                </select>
+                <input
+                  placeholder="Registration number"
+                  value={taxProfile.registration_number}
+                  onChange={(event) => updateTaxProfileField("registration_number", event.target.value)}
+                  style={themedStyles.tableInput}
+                />
+                <input
+                  placeholder="Currency"
+                  value={taxProfile.currency_code}
+                  onChange={(event) => updateTaxProfileField("currency_code", event.target.value)}
+                  style={themedStyles.tableInput}
+                />
+                <input
+                  placeholder="Sales tax label"
+                  value={taxProfile.sales_tax_name}
+                  onChange={(event) => updateTaxProfileField("sales_tax_name", event.target.value)}
+                  style={themedStyles.tableInput}
+                />
+                <input
+                  placeholder="Purchase tax label"
+                  value={taxProfile.purchase_tax_name}
+                  onChange={(event) => updateTaxProfileField("purchase_tax_name", event.target.value)}
+                  style={themedStyles.tableInput}
+                />
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder="Indirect tax rate"
+                  value={taxProfile.indirect_tax_rate}
+                  onChange={(event) => updateTaxProfileField("indirect_tax_rate", event.target.value)}
+                  style={themedStyles.tableInput}
+                />
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder="Income tax rate"
+                  value={taxProfile.income_tax_rate}
+                  onChange={(event) => updateTaxProfileField("income_tax_rate", event.target.value)}
+                  style={themedStyles.tableInput}
+                />
+                <input
+                  type="number"
+                  min="1"
+                  max="12"
+                  placeholder="Period start month"
+                  value={taxProfile.period_start_month}
+                  onChange={(event) => updateTaxProfileField("period_start_month", event.target.value)}
+                  style={themedStyles.tableInput}
+                />
+              </div>
+              <div style={themedStyles.actionRow}>
+                <button type="button" onClick={saveTaxProfile} style={themedStyles.button} disabled={!canManagePayables}>
+                  Save Tax Profile
+                </button>
+              </div>
+              <p style={themedStyles.updateIndicator}>
+                This profile makes the tax center jurisdiction-aware by company configuration, so the filing preview reflects your labels, rates, filing cadence, and registration context.
+              </p>
+            </div>
+            <div style={themedStyles.modulePanel}>
+              <h4 style={themedStyles.moduleTitle}>Current Tax Summary</h4>
+              <div style={themedStyles.kpiGrid}>
+                <div style={themedStyles.kpiItem}>
+                  <strong>{taxSummary?.sales_tax_name || "Sales Tax Collected"}</strong>
+                  <div>{formatMoney(taxSummary?.sales_tax_collected || 0)}</div>
+                </div>
+                <div style={themedStyles.kpiItem}>
+                  <strong>{taxSummary?.purchase_tax_name || "Purchase Tax Credit"}</strong>
+                  <div>{formatMoney(taxSummary?.purchase_tax_credit || 0)}</div>
+                </div>
+                <div style={themedStyles.kpiItem}>
+                  <strong>Net Tax Due</strong>
+                  <div>{formatMoney(taxSummary?.net_tax_due || 0)}</div>
+                </div>
+                <div style={themedStyles.kpiItem}>
+                  <strong>Taxable Profit</strong>
+                  <div>{formatMoney(taxSummary?.taxable_profit || 0)}</div>
+                </div>
+                <div style={themedStyles.kpiItem}>
+                  <strong>Estimated Income Tax</strong>
+                  <div>{formatMoney(taxSummary?.estimated_income_tax || 0)}</div>
+                </div>
+                <div style={themedStyles.kpiItem}>
+                  <strong>Effective Rate</strong>
+                  <div>{formatPercent(taxSummary?.effective_tax_rate || 0)}</div>
+                </div>
+              </div>
+              <div style={themedStyles.narrativeCard}>
+                Filing window: {taxFilingPreview?.period_start || "N/A"} to {taxFilingPreview?.period_end || "N/A"}.
+                {` `}Sales docs: {taxFilingPreview?.documents?.sales_documents || 0}. Purchase docs: {taxFilingPreview?.documents?.purchase_documents || 0}.
+              </div>
+            </div>
+            <div style={themedStyles.modulePanel}>
+              <h4 style={themedStyles.moduleTitle}>Jurisdictions and Filing Queue</h4>
+              <div style={themedStyles.adminCreateGrid}>
+                <select
+                  value={taxProfile.jurisdiction_code}
+                  onChange={(event) => updateTaxProfileField("jurisdiction_code", event.target.value)}
+                  style={themedStyles.tableInput}
+                >
+                  {taxJurisdictions.map((jurisdiction) => (
+                    <option key={jurisdiction.code} value={jurisdiction.code}>
+                      {jurisdiction.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={taxFilingForm.filing_type}
+                  onChange={(event) => updateTaxFilingFormField("filing_type", event.target.value)}
+                  style={themedStyles.tableInput}
+                >
+                  <option value="indirect_tax">indirect_tax</option>
+                  <option value="income_tax">income_tax</option>
+                  <option value="payroll_tax">payroll_tax</option>
+                </select>
+                <input
+                  type="date"
+                  value={taxFilingForm.period_start}
+                  onChange={(event) => updateTaxFilingFormField("period_start", event.target.value)}
+                  style={themedStyles.tableInput}
+                />
+                <input
+                  type="date"
+                  value={taxFilingForm.period_end}
+                  onChange={(event) => updateTaxFilingFormField("period_end", event.target.value)}
+                  style={themedStyles.tableInput}
+                />
+                <button type="button" onClick={prepareTaxFilingRecord} style={themedStyles.button} disabled={!canManagePayables}>
+                  Prepare Filing
+                </button>
+              </div>
+              <div style={themedStyles.tableWrap}>
+                <table style={themedStyles.table}>
+                  <thead>
+                    <tr>
+                      <th style={themedStyles.th}>Jurisdiction</th>
+                      <th style={themedStyles.th}>Period</th>
+                      <th style={themedStyles.th}>Type</th>
+                      <th style={themedStyles.th}>Status</th>
+                      <th style={themedStyles.th}>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {taxFilings.slice(0, 8).map((filing) => (
+                      <tr key={filing.id}>
+                        <td style={themedStyles.td}>{filing.jurisdiction_code}</td>
+                        <td style={themedStyles.td}>{filing.period_start} to {filing.period_end}</td>
+                        <td style={themedStyles.td}>{filing.filing_type}</td>
+                        <td style={themedStyles.td}><span style={themedStyles.statusPill}>{filing.status}</span></td>
+                        <td style={themedStyles.td}>
+                          {filing.status !== "submitted" ? (
+                            <button type="button" onClick={() => submitTaxFilingRecord(filing.id)} style={themedStyles.button} disabled={!canManagePayables}>
+                              Submit
+                            </button>
+                          ) : (
+                            <span style={themedStyles.updateIndicator}>{filing.reference || "Submitted"}</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style={themedStyles.card}>
+          <div style={themedStyles.statementHeader}>
+            <div>
+              <h3>Accounting Core</h3>
+              <p style={themedStyles.graphNote}>True chart of accounts, double-entry journals, trial balance, and live account registers for accountant-grade review.</p>
+            </div>
+          </div>
+          <div style={themedStyles.kpiGrid}>
+            <div style={themedStyles.kpiItem}>
+              <strong>Accounts</strong>
+              <div>{accountingOverviewData?.account_count || 0}</div>
+            </div>
+            <div style={themedStyles.kpiItem}>
+              <strong>Journal Entries</strong>
+              <div>{accountingOverviewData?.journal_count || 0}</div>
+            </div>
+            <div style={themedStyles.kpiItem}>
+              <strong>Trial Balance</strong>
+              <div>{accountingOverviewData?.trial_balance?.balanced ? "Balanced" : "Out of balance"}</div>
+            </div>
+          </div>
+          <div style={themedStyles.moduleGrid}>
+            <div style={themedStyles.modulePanel}>
+              <h4 style={themedStyles.moduleTitle}>Chart of Accounts</h4>
+              <div style={themedStyles.adminCreateGrid}>
+                <input placeholder="Code" value={accountForm.code} onChange={(event) => updateAccountFormField("code", event.target.value)} style={themedStyles.tableInput} />
+                <input placeholder="Name" value={accountForm.name} onChange={(event) => updateAccountFormField("name", event.target.value)} style={themedStyles.tableInput} />
+                <select value={accountForm.category} onChange={(event) => updateAccountFormField("category", event.target.value)} style={themedStyles.tableInput}>
+                  <option value="asset">asset</option>
+                  <option value="liability">liability</option>
+                  <option value="equity">equity</option>
+                  <option value="revenue">revenue</option>
+                  <option value="expense">expense</option>
+                </select>
+                <input placeholder="Subtype" value={accountForm.subtype} onChange={(event) => updateAccountFormField("subtype", event.target.value)} style={themedStyles.tableInput} />
+                <select value={accountForm.normal_balance} onChange={(event) => updateAccountFormField("normal_balance", event.target.value)} style={themedStyles.tableInput}>
+                  <option value="debit">debit</option>
+                  <option value="credit">credit</option>
+                </select>
+                <button type="button" onClick={createChartAccount} style={themedStyles.button} disabled={!canManagePayables}>Create Account</button>
+              </div>
+              <div style={themedStyles.actionRow}>
+                <button type="button" onClick={seedDefaultChartOfAccounts} style={themedStyles.secondaryActionButton} disabled={!canManagePayables}>
+                  Seed Default Chart
+                </button>
+              </div>
+              <div style={themedStyles.tableWrap}>
+                <table style={themedStyles.table}>
+                  <thead>
+                    <tr>
+                      <th style={themedStyles.th}>Code</th>
+                      <th style={themedStyles.th}>Name</th>
+                      <th style={themedStyles.th}>Category</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {chartOfAccounts.slice(0, 10).map((account) => (
+                      <tr key={account.id}>
+                        <td style={themedStyles.td}>{account.code}</td>
+                        <td style={themedStyles.td}>{account.name}</td>
+                        <td style={themedStyles.td}>{account.category}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div style={themedStyles.modulePanel}>
+              <h4 style={themedStyles.moduleTitle}>Manual Journal</h4>
+              <div style={themedStyles.adminCreateGrid}>
+                <input placeholder="Memo" value={journalForm.memo} onChange={(event) => setJournalForm((current) => ({ ...current, memo: event.target.value }))} style={themedStyles.tableInput} />
+                <input type="date" value={journalForm.entry_date} onChange={(event) => setJournalForm((current) => ({ ...current, entry_date: event.target.value }))} style={themedStyles.tableInput} />
+                <input placeholder="Reference" value={journalForm.reference} onChange={(event) => setJournalForm((current) => ({ ...current, reference: event.target.value }))} style={themedStyles.tableInput} />
+              </div>
+              <div style={themedStyles.documentLineList}>
+                {journalForm.lines.map((line, index) => (
+                  <div key={`journal-line-${index}`} style={themedStyles.documentLineRow}>
+                    <input placeholder="Account code" value={line.account_code} onChange={(event) => updateJournalLine(index, "account_code", event.target.value)} style={themedStyles.tableInput} />
+                    <input type="number" step="0.01" placeholder="Debit" value={line.debit} onChange={(event) => updateJournalLine(index, "debit", event.target.value)} style={themedStyles.tableInput} />
+                    <input type="number" step="0.01" placeholder="Credit" value={line.credit} onChange={(event) => updateJournalLine(index, "credit", event.target.value)} style={themedStyles.tableInput} />
+                    <button type="button" onClick={() => removeJournalLine(index)} style={themedStyles.deleteButton}>Remove</button>
+                  </div>
+                ))}
+              </div>
+              <div style={themedStyles.actionRow}>
+                <button type="button" onClick={addJournalLine} style={themedStyles.secondaryActionButton}>Add Line</button>
+                <button type="button" onClick={postManualJournal} style={themedStyles.button} disabled={!canManagePayables}>Post Journal</button>
+              </div>
+              <div style={themedStyles.tableWrap}>
+                <table style={themedStyles.table}>
+                  <thead>
+                    <tr>
+                      <th style={themedStyles.th}>Entry</th>
+                      <th style={themedStyles.th}>Date</th>
+                      <th style={themedStyles.th}>Memo</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(accountingOverviewData?.recent_entries || []).map((entry) => (
+                      <tr key={entry.id}>
+                        <td style={themedStyles.td}>{entry.entry_number}</td>
+                        <td style={themedStyles.td}>{entry.entry_date}</td>
+                        <td style={themedStyles.td}>{entry.memo}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div style={themedStyles.modulePanel}>
+              <h4 style={themedStyles.moduleTitle}>Account Register</h4>
+              <div style={themedStyles.adminCreateGrid}>
+                <select value={selectedRegisterAccountId} onChange={(event) => setSelectedRegisterAccountId(event.target.value)} style={themedStyles.tableInput}>
+                  {chartOfAccounts.map((account) => (
+                    <option key={account.id} value={account.id}>
+                      {account.code} - {account.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div style={themedStyles.kpiItem}>
+                <strong>Ending Balance</strong>
+                <div>{formatMoney(accountRegister?.ending_balance || 0)}</div>
+              </div>
+              <div style={themedStyles.tableWrap}>
+                <table style={themedStyles.table}>
+                  <thead>
+                    <tr>
+                      <th style={themedStyles.th}>Date</th>
+                      <th style={themedStyles.th}>Entry</th>
+                      <th style={themedStyles.th}>Debit</th>
+                      <th style={themedStyles.th}>Credit</th>
+                      <th style={themedStyles.th}>Running</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(accountRegister?.items || []).slice(-8).map((item) => (
+                      <tr key={`${item.entry_id}-${item.entry_number}`}>
+                        <td style={themedStyles.td}>{item.entry_date}</td>
+                        <td style={themedStyles.td}>{item.entry_number}</td>
+                        <td style={themedStyles.td}>{formatMoney(item.debit)}</td>
+                        <td style={themedStyles.td}>{formatMoney(item.credit)}</td>
+                        <td style={themedStyles.td}>{formatMoney(item.running_balance)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style={themedStyles.card}>
+          <div style={themedStyles.statementHeader}>
+            <div>
+              <h3>Vendor Compliance and Bill Pay Rails</h3>
+              <p style={themedStyles.graphNote}>Vendor master data, 1099 readiness, scheduled disbursements, and execution tracking by payment rail.</p>
+            </div>
+          </div>
+          <div style={themedStyles.kpiGrid}>
+            <div style={themedStyles.kpiItem}>
+              <strong>Reportable 1099 Total</strong>
+              <div>{formatMoney(vendor1099Summary?.reportable_total || 0)}</div>
+            </div>
+            <div style={themedStyles.kpiItem}>
+              <strong>1099 Ready Vendors</strong>
+              <div>{vendor1099Summary?.ready_count || 0}</div>
+            </div>
+            <div style={themedStyles.kpiItem}>
+              <strong>Scheduled Disbursements</strong>
+              <div>{billPaySummary?.scheduled_count || 0}</div>
+            </div>
+            <div style={themedStyles.kpiItem}>
+              <strong>Completed Disbursements</strong>
+              <div>{formatMoney(billPaySummary?.completed_amount || 0)}</div>
+            </div>
+          </div>
+          <div style={themedStyles.moduleGrid}>
+            <div style={themedStyles.modulePanel}>
+              <h4 style={themedStyles.moduleTitle}>Vendor Profile</h4>
+              <div style={themedStyles.adminCreateGrid}>
+                <input placeholder="Vendor name" value={vendorForm.vendor_name} onChange={(event) => updateVendorFormField("vendor_name", event.target.value)} style={themedStyles.tableInput} />
+                <input placeholder="Email" value={vendorForm.email} onChange={(event) => updateVendorFormField("email", event.target.value)} style={themedStyles.tableInput} />
+                <input placeholder="Tax ID / TIN" value={vendorForm.tax_id} onChange={(event) => updateVendorFormField("tax_id", event.target.value)} style={themedStyles.tableInput} />
+                <select value={vendorForm.default_payment_rail} onChange={(event) => updateVendorFormField("default_payment_rail", event.target.value)} style={themedStyles.tableInput}>
+                  <option value="ach">ach</option>
+                  <option value="wire">wire</option>
+                  <option value="card">card</option>
+                  <option value="check">check</option>
+                  <option value="mobile_money">mobile_money</option>
+                </select>
+                <select value={vendorForm.tin_status} onChange={(event) => updateVendorFormField("tin_status", event.target.value)} style={themedStyles.tableInput}>
+                  <option value="pending">pending</option>
+                  <option value="received">received</option>
+                  <option value="verified">verified</option>
+                </select>
+                <button type="button" onClick={saveVendorProfile} style={themedStyles.button} disabled={!canManagePayables}>Save Vendor</button>
+              </div>
+              <div style={themedStyles.tableWrap}>
+                <table style={themedStyles.table}>
+                  <thead>
+                    <tr>
+                      <th style={themedStyles.th}>Vendor</th>
+                      <th style={themedStyles.th}>Rail</th>
+                      <th style={themedStyles.th}>1099</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {vendors.slice(0, 8).map((vendor) => (
+                      <tr key={vendor.id}>
+                        <td style={themedStyles.td}>{vendor.vendor_name}</td>
+                        <td style={themedStyles.td}>{vendor.default_payment_rail}</td>
+                        <td style={themedStyles.td}>{vendor.is_1099_eligible ? vendor.tin_status : "n/a"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div style={themedStyles.modulePanel}>
+              <h4 style={themedStyles.moduleTitle}>Scheduled and Completed Payments</h4>
+              <div style={themedStyles.tableWrap}>
+                <table style={themedStyles.table}>
+                  <thead>
+                    <tr>
+                      <th style={themedStyles.th}>Bill</th>
+                      <th style={themedStyles.th}>Vendor</th>
+                      <th style={themedStyles.th}>Rail</th>
+                      <th style={themedStyles.th}>Status</th>
+                      <th style={themedStyles.th}>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(billPaySummary?.items || []).slice(0, 8).map((item) => (
+                      <tr key={item.id}>
+                        <td style={themedStyles.td}>{item.bill_number}</td>
+                        <td style={themedStyles.td}>{item.vendor_name}</td>
+                        <td style={themedStyles.td}>{item.payment_rail}</td>
+                        <td style={themedStyles.td}><span style={themedStyles.statusPill}>{item.status}</span></td>
+                        <td style={themedStyles.td}>
+                          {item.status !== "completed" ? (
+                            <button type="button" onClick={() => executeBillDisbursement(item.id)} style={themedStyles.button} disabled={!canManagePayables}>
+                              Execute
+                            </button>
+                          ) : (
+                            <span style={themedStyles.updateIndicator}>{item.confirmation_code || "Completed"}</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p style={themedStyles.updateIndicator}>Use the Vendor Bill Queue above to schedule payments directly from open bills.</p>
+            </div>
+          </div>
+        </div>
+
+        <div style={themedStyles.card}>
+          <div style={themedStyles.statementHeader}>
+            <div>
+              <h3>Reconciliation Rules and Exceptions</h3>
+              <p style={themedStyles.graphNote}>Keyword rules, exception queues, and transaction triage so bank close becomes a managed workflow instead of a manual hunt.</p>
+            </div>
+          </div>
+          <div style={themedStyles.kpiGrid}>
+            <div style={themedStyles.kpiItem}><strong>Unmatched</strong><div>{reconciliationWorkspaceData?.summary?.unmatched || 0}</div></div>
+            <div style={themedStyles.kpiItem}><strong>Rule Matched</strong><div>{reconciliationWorkspaceData?.summary?.rule_matched || 0}</div></div>
+            <div style={themedStyles.kpiItem}><strong>Exceptions</strong><div>{reconciliationWorkspaceData?.summary?.exceptions || 0}</div></div>
+          </div>
+          <div style={themedStyles.moduleGrid}>
+            <div style={themedStyles.modulePanel}>
+              <h4 style={themedStyles.moduleTitle}>Rule Builder</h4>
+              <div style={themedStyles.adminCreateGrid}>
+                <input placeholder="Rule name" value={reconciliationRuleForm.name} onChange={(event) => updateReconciliationRuleField("name", event.target.value)} style={themedStyles.tableInput} />
+                <input placeholder="Keyword" value={reconciliationRuleForm.keyword} onChange={(event) => updateReconciliationRuleField("keyword", event.target.value)} style={themedStyles.tableInput} />
+                <select value={reconciliationRuleForm.direction} onChange={(event) => updateReconciliationRuleField("direction", event.target.value)} style={themedStyles.tableInput}>
+                  <option value="any">any</option>
+                  <option value="inflow">inflow</option>
+                  <option value="outflow">outflow</option>
+                </select>
+                <select value={reconciliationRuleForm.auto_action} onChange={(event) => updateReconciliationRuleField("auto_action", event.target.value)} style={themedStyles.tableInput}>
+                  <option value="suggest_account">suggest_account</option>
+                  <option value="flag_exception">flag_exception</option>
+                </select>
+                <input placeholder="Target / reference" value={reconciliationRuleForm.target_reference} onChange={(event) => updateReconciliationRuleField("target_reference", event.target.value)} style={themedStyles.tableInput} />
+                <button type="button" onClick={createReconciliationRuleRecord} style={themedStyles.button} disabled={!canManagePayables}>Save Rule</button>
+              </div>
+              <div style={themedStyles.actionRow}>
+                <button type="button" onClick={autoApplyReconciliationRules} style={themedStyles.secondaryActionButton} disabled={!canManagePayables}>
+                  Auto Apply Rules
+                </button>
+              </div>
+              <div style={themedStyles.tableWrap}>
+                <table style={themedStyles.table}>
+                  <thead>
+                    <tr>
+                      <th style={themedStyles.th}>Rule</th>
+                      <th style={themedStyles.th}>Direction</th>
+                      <th style={themedStyles.th}>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reconciliationRules.slice(0, 8).map((rule) => (
+                      <tr key={rule.id}>
+                        <td style={themedStyles.td}>{rule.name}</td>
+                        <td style={themedStyles.td}>{rule.direction}</td>
+                        <td style={themedStyles.td}>{rule.auto_action}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div style={themedStyles.modulePanel}>
+              <h4 style={themedStyles.moduleTitle}>Exception Queue</h4>
+              <div style={themedStyles.reconciliationList}>
+                {(reconciliationWorkspaceData?.exceptions || []).slice(0, 8).map((exception) => (
+                  <div key={exception.id} style={themedStyles.reconciliationItem}>
+                    <div>
+                      <strong>{exception.exception_type}</strong>
+                      <div style={themedStyles.updateIndicator}>{exception.transaction?.description || "Bank transaction"} • {formatMoney(exception.transaction?.absolute_amount || 0)}</div>
+                    </div>
+                    <button type="button" onClick={() => resolveReconciliationException(exception.id)} style={themedStyles.button} disabled={!canManagePayables}>
+                      Resolve
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <p style={themedStyles.updateIndicator}>Use “Flag Exception” on bank items that need human follow-up.</p>
+            </div>
+          </div>
+        </div>
+
+        <div style={themedStyles.card}>
+          <div style={themedStyles.statementHeader}>
+            <div>
+              <h3>Payroll, Contractors, Time, and Mileage</h3>
+              <p style={themedStyles.graphNote}>Operational workforce management with contractor tracking, time capture, mileage reimbursement, and payroll processing.</p>
+            </div>
+          </div>
+          <div style={themedStyles.kpiGrid}>
+            <div style={themedStyles.kpiItem}><strong>Employees</strong><div>{workforceOverviewData?.employee_count || 0}</div></div>
+            <div style={themedStyles.kpiItem}><strong>Contractors</strong><div>{workforceOverviewData?.contractor_count || 0}</div></div>
+            <div style={themedStyles.kpiItem}><strong>Hours This Month</strong><div>{workforceOverviewData?.hours_this_month || 0}</div></div>
+            <div style={themedStyles.kpiItem}><strong>Mileage This Month</strong><div>{workforceOverviewData?.mileage_this_month || 0}</div></div>
+            <div style={themedStyles.kpiItem}><strong>Payroll This Month</strong><div>{formatMoney(workforceOverviewData?.payroll_this_month || 0)}</div></div>
+            <div style={themedStyles.kpiItem}><strong>1099 Exposure</strong><div>{formatMoney(workforceOverviewData?.contractor_1099_exposure || 0)}</div></div>
+          </div>
+          <div style={themedStyles.moduleGrid}>
+            <div style={themedStyles.modulePanel}>
+              <h4 style={themedStyles.moduleTitle}>People Setup</h4>
+              <div style={themedStyles.adminCreateGrid}>
+                <input placeholder="Employee name" value={employeeForm.full_name} onChange={(event) => updateEmployeeFormField("full_name", event.target.value)} style={themedStyles.tableInput} />
+                <input placeholder="Email" value={employeeForm.email} onChange={(event) => updateEmployeeFormField("email", event.target.value)} style={themedStyles.tableInput} />
+                <select value={employeeForm.pay_type} onChange={(event) => updateEmployeeFormField("pay_type", event.target.value)} style={themedStyles.tableInput}>
+                  <option value="hourly">hourly</option>
+                  <option value="salary">salary</option>
+                </select>
+                <input type="number" step="0.01" placeholder="Hourly rate" value={employeeForm.hourly_rate} onChange={(event) => updateEmployeeFormField("hourly_rate", event.target.value)} style={themedStyles.tableInput} />
+                <input type="number" step="0.01" placeholder="Salary amount" value={employeeForm.salary_amount} onChange={(event) => updateEmployeeFormField("salary_amount", event.target.value)} style={themedStyles.tableInput} />
+                <button type="button" onClick={createEmployeeRecord} style={themedStyles.button} disabled={!canManagePayables}>Add Employee</button>
+              </div>
+              <div style={themedStyles.adminCreateGrid}>
+                <input placeholder="Contractor name" value={contractorForm.full_name} onChange={(event) => updateContractorFormField("full_name", event.target.value)} style={themedStyles.tableInput} />
+                <input placeholder="Email" value={contractorForm.email} onChange={(event) => updateContractorFormField("email", event.target.value)} style={themedStyles.tableInput} />
+                <input placeholder="Tax ID" value={contractorForm.tax_id} onChange={(event) => updateContractorFormField("tax_id", event.target.value)} style={themedStyles.tableInput} />
+                <input type="number" step="0.01" placeholder="Default rate" value={contractorForm.default_rate} onChange={(event) => updateContractorFormField("default_rate", event.target.value)} style={themedStyles.tableInput} />
+                <button type="button" onClick={createContractorRecord} style={themedStyles.secondaryActionButton} disabled={!canManagePayables}>Add Contractor</button>
+              </div>
+              <div style={themedStyles.tableWrap}>
+                <table style={themedStyles.table}>
+                  <thead>
+                    <tr>
+                      <th style={themedStyles.th}>People</th>
+                      <th style={themedStyles.th}>Type</th>
+                      <th style={themedStyles.th}>Rate</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...employees.slice(0, 4).map((employee) => ({ ...employee, worker_type: "employee", display_rate: employee.pay_type === "hourly" ? employee.hourly_rate : employee.salary_amount })), ...contractors.slice(0, 4).map((contractor) => ({ ...contractor, worker_type: "contractor", display_rate: contractor.default_rate }))].map((worker) => (
+                      <tr key={`${worker.worker_type}-${worker.id}`}>
+                        <td style={themedStyles.td}>{worker.full_name}</td>
+                        <td style={themedStyles.td}>{worker.worker_type}</td>
+                        <td style={themedStyles.td}>{formatMoney(worker.display_rate || 0)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div style={themedStyles.modulePanel}>
+              <h4 style={themedStyles.moduleTitle}>Time, Mileage, and Payroll</h4>
+              <div style={themedStyles.adminCreateGrid}>
+                <select value={timeEntryForm.employee_id} onChange={(event) => updateTimeEntryFormField("employee_id", event.target.value)} style={themedStyles.tableInput}>
+                  <option value="">Select employee</option>
+                  {employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.full_name}</option>)}
+                </select>
+                <select value={timeEntryForm.contractor_id} onChange={(event) => updateTimeEntryFormField("contractor_id", event.target.value)} style={themedStyles.tableInput}>
+                  <option value="">Select contractor</option>
+                  {contractors.map((contractor) => <option key={contractor.id} value={contractor.id}>{contractor.full_name}</option>)}
+                </select>
+                <select value={timeEntryForm.project_id} onChange={(event) => updateTimeEntryFormField("project_id", event.target.value)} style={themedStyles.tableInput}>
+                  <option value="">Project (optional)</option>
+                  {projects.map((project) => <option key={project.id} value={project.id}>{project.project_code}</option>)}
+                </select>
+                <input type="date" value={timeEntryForm.work_date} onChange={(event) => updateTimeEntryFormField("work_date", event.target.value)} style={themedStyles.tableInput} />
+                <input type="number" step="0.1" placeholder="Hours" value={timeEntryForm.hours} onChange={(event) => updateTimeEntryFormField("hours", event.target.value)} style={themedStyles.tableInput} />
+                <button type="button" onClick={createTimeEntryRecord} style={themedStyles.button} disabled={!canManageFinanceOps}>Log Time</button>
+              </div>
+              <div style={themedStyles.adminCreateGrid}>
+                <select value={mileageForm.employee_id} onChange={(event) => updateMileageFormField("employee_id", event.target.value)} style={themedStyles.tableInput}>
+                  <option value="">Mileage employee</option>
+                  {employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.full_name}</option>)}
+                </select>
+                <select value={mileageForm.contractor_id} onChange={(event) => updateMileageFormField("contractor_id", event.target.value)} style={themedStyles.tableInput}>
+                  <option value="">Mileage contractor</option>
+                  {contractors.map((contractor) => <option key={contractor.id} value={contractor.id}>{contractor.full_name}</option>)}
+                </select>
+                <input type="number" step="0.1" placeholder="Miles" value={mileageForm.miles} onChange={(event) => updateMileageFormField("miles", event.target.value)} style={themedStyles.tableInput} />
+                <input type="number" step="0.01" placeholder="Rate per mile" value={mileageForm.rate_per_mile} onChange={(event) => updateMileageFormField("rate_per_mile", event.target.value)} style={themedStyles.tableInput} />
+                <button type="button" onClick={createMileageRecord} style={themedStyles.secondaryActionButton} disabled={!canManageFinanceOps}>Log Mileage</button>
+                <button type="button" onClick={processPayrollRun} style={themedStyles.button} disabled={!canManagePayables}>Process Payroll</button>
+              </div>
+              <div style={themedStyles.tableWrap}>
+                <table style={themedStyles.table}>
+                  <thead>
+                    <tr>
+                      <th style={themedStyles.th}>Entry</th>
+                      <th style={themedStyles.th}>Worker</th>
+                      <th style={themedStyles.th}>Value</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(payrollRuns.slice(0, 3) || []).map((run) => (
+                      <tr key={`payroll-${run.id}`}>
+                        <td style={themedStyles.td}>{run.payroll_number}</td>
+                        <td style={themedStyles.td}>Payroll Run</td>
+                        <td style={themedStyles.td}>{formatMoney(run.net_cash)}</td>
+                      </tr>
+                    ))}
+                    {(timeEntries.slice(0, 3) || []).map((entry) => (
+                      <tr key={`time-${entry.id}`}>
+                        <td style={themedStyles.td}>{entry.work_date}</td>
+                        <td style={themedStyles.td}>{entry.worker_name}</td>
+                        <td style={themedStyles.td}>{entry.hours} hrs</td>
+                      </tr>
+                    ))}
+                    {(mileageEntries.slice(0, 2) || []).map((entry) => (
+                      <tr key={`mileage-${entry.id}`}>
+                        <td style={themedStyles.td}>{entry.trip_date}</td>
+                        <td style={themedStyles.td}>{entry.worker_name}</td>
+                        <td style={themedStyles.td}>{formatMoney(entry.reimbursement)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div style={themedStyles.card}>
+          <div style={themedStyles.statementHeader}>
+            <div>
+              <h3>Inventory, Purchasing, Projects, and Integrations</h3>
+              <p style={themedStyles.graphNote}>SKU-level stock, purchase ordering, reorder signals, project/job costing, accountant toolkit, and installable/mobile-ready integration surfaces.</p>
+            </div>
+          </div>
+          <div style={themedStyles.kpiGrid}>
+            <div style={themedStyles.kpiItem}><strong>Inventory Value</strong><div>{formatMoney(inventoryWorkspace?.inventory_value || 0)}</div></div>
+            <div style={themedStyles.kpiItem}><strong>Low Stock Items</strong><div>{inventoryWorkspace?.low_stock_count || 0}</div></div>
+            <div style={themedStyles.kpiItem}><strong>Project Margin</strong><div>{formatMoney(projectSummaryData?.total_margin || 0)}</div></div>
+            <div style={themedStyles.kpiItem}><strong>Connected Integrations</strong><div>{integrations.filter((item) => item.status === "connected").length}</div></div>
+          </div>
+          <div style={themedStyles.moduleGrid}>
+            <div style={themedStyles.modulePanel}>
+              <h4 style={themedStyles.moduleTitle}>Inventory and Purchase Orders</h4>
+              <div style={themedStyles.adminCreateGrid}>
+                <input placeholder="SKU" value={inventoryItemForm.sku} onChange={(event) => updateInventoryItemFormField("sku", event.target.value)} style={themedStyles.tableInput} />
+                <input placeholder="Name" value={inventoryItemForm.name} onChange={(event) => updateInventoryItemFormField("name", event.target.value)} style={themedStyles.tableInput} />
+                <input type="number" step="0.01" placeholder="Qty on hand" value={inventoryItemForm.quantity_on_hand} onChange={(event) => updateInventoryItemFormField("quantity_on_hand", event.target.value)} style={themedStyles.tableInput} />
+                <input type="number" step="0.01" placeholder="Reorder point" value={inventoryItemForm.reorder_point} onChange={(event) => updateInventoryItemFormField("reorder_point", event.target.value)} style={themedStyles.tableInput} />
+                <input type="number" step="0.01" placeholder="Unit cost" value={inventoryItemForm.unit_cost} onChange={(event) => updateInventoryItemFormField("unit_cost", event.target.value)} style={themedStyles.tableInput} />
+                <button type="button" onClick={createInventoryItemRecord} style={themedStyles.button} disabled={!canManagePayables}>Create Item</button>
+              </div>
+              <div style={themedStyles.adminCreateGrid}>
+                <input placeholder="PO vendor" value={purchaseOrderForm.vendor_name} onChange={(event) => updatePurchaseOrderFormField("vendor_name", event.target.value)} style={themedStyles.tableInput} />
+                <input type="date" value={purchaseOrderForm.issue_date} onChange={(event) => updatePurchaseOrderFormField("issue_date", event.target.value)} style={themedStyles.tableInput} />
+                <input type="date" value={purchaseOrderForm.expected_date} onChange={(event) => updatePurchaseOrderFormField("expected_date", event.target.value)} style={themedStyles.tableInput} />
+                <button type="button" onClick={() => addPurchaseOrderItem()} style={themedStyles.secondaryActionButton}>Add PO Line</button>
+                <button type="button" onClick={createPurchaseOrderRecord} style={themedStyles.button} disabled={!canManagePayables}>Create PO</button>
+              </div>
+              <div style={themedStyles.documentLineList}>
+                {purchaseOrderForm.items.map((item, index) => (
+                  <div key={`po-item-${index}`} style={themedStyles.documentLineRow}>
+                    <input placeholder="SKU" value={item.sku} onChange={(event) => updatePurchaseOrderItem(index, "sku", event.target.value)} style={themedStyles.tableInput} />
+                    <input type="number" step="0.01" placeholder="Qty" value={item.quantity} onChange={(event) => updatePurchaseOrderItem(index, "quantity", event.target.value)} style={themedStyles.tableInput} />
+                    <input type="number" step="0.01" placeholder="Unit cost" value={item.unit_cost} onChange={(event) => updatePurchaseOrderItem(index, "unit_cost", event.target.value)} style={themedStyles.tableInput} />
+                    <button type="button" onClick={() => removePurchaseOrderItem(index)} style={themedStyles.deleteButton}>Remove</button>
+                  </div>
+                ))}
+              </div>
+              <div style={themedStyles.tableWrap}>
+                <table style={themedStyles.table}>
+                  <thead>
+                    <tr>
+                      <th style={themedStyles.th}>PO</th>
+                      <th style={themedStyles.th}>Vendor</th>
+                      <th style={themedStyles.th}>Status</th>
+                      <th style={themedStyles.th}>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(inventoryWorkspace?.purchase_orders || []).slice(0, 6).map((po) => (
+                      <tr key={po.id}>
+                        <td style={themedStyles.td}>{po.po_number}</td>
+                        <td style={themedStyles.td}>{po.vendor_name}</td>
+                        <td style={themedStyles.td}><span style={themedStyles.statusPill}>{po.status}</span></td>
+                        <td style={themedStyles.td}>
+                          {po.status === "draft" ? (
+                            <button type="button" onClick={() => submitPurchaseOrderRecord(po.id)} style={themedStyles.button} disabled={!canManagePayables}>Submit</button>
+                          ) : null}
+                          {po.status === "ordered" || po.status === "partial" ? (
+                            <button type="button" onClick={() => receivePurchaseOrderRecord(po)} style={themedStyles.secondaryActionButton} disabled={!canManagePayables}>Receive</button>
+                          ) : null}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div style={themedStyles.modulePanel}>
+              <h4 style={themedStyles.moduleTitle}>Projects and Accountant Toolkit</h4>
+              <div style={themedStyles.adminCreateGrid}>
+                <input placeholder="Project code" value={projectForm.project_code} onChange={(event) => updateProjectFormField("project_code", event.target.value)} style={themedStyles.tableInput} />
+                <input placeholder="Name" value={projectForm.name} onChange={(event) => updateProjectFormField("name", event.target.value)} style={themedStyles.tableInput} />
+                <input placeholder="Customer" value={projectForm.customer_name} onChange={(event) => updateProjectFormField("customer_name", event.target.value)} style={themedStyles.tableInput} />
+                <input type="number" step="0.01" placeholder="Budget revenue" value={projectForm.budget_revenue} onChange={(event) => updateProjectFormField("budget_revenue", event.target.value)} style={themedStyles.tableInput} />
+                <input type="number" step="0.01" placeholder="Budget cost" value={projectForm.budget_cost} onChange={(event) => updateProjectFormField("budget_cost", event.target.value)} style={themedStyles.tableInput} />
+                <button type="button" onClick={createProjectRecord} style={themedStyles.button} disabled={!canManagePayables}>Create Project</button>
+              </div>
+              <div style={themedStyles.adminCreateGrid}>
+                <select value={projectCostForm.project_id} onChange={(event) => updateProjectCostFormField("project_id", event.target.value)} style={themedStyles.tableInput}>
+                  <option value="">Select project</option>
+                  {projects.map((project) => <option key={project.id} value={project.id}>{project.project_code}</option>)}
+                </select>
+                <select value={projectCostForm.entry_type} onChange={(event) => updateProjectCostFormField("entry_type", event.target.value)} style={themedStyles.tableInput}>
+                  <option value="cost">cost</option>
+                  <option value="revenue">revenue</option>
+                </select>
+                <input placeholder="Description" value={projectCostForm.description} onChange={(event) => updateProjectCostFormField("description", event.target.value)} style={themedStyles.tableInput} />
+                <input type="number" step="0.01" placeholder="Amount" value={projectCostForm.amount} onChange={(event) => updateProjectCostFormField("amount", event.target.value)} style={themedStyles.tableInput} />
+                <button type="button" onClick={createProjectCostRecord} style={themedStyles.secondaryActionButton} disabled={!canManageFinanceOps}>Post Project Entry</button>
+              </div>
+              <div style={themedStyles.tableWrap}>
+                <table style={themedStyles.table}>
+                  <thead>
+                    <tr>
+                      <th style={themedStyles.th}>Project</th>
+                      <th style={themedStyles.th}>Revenue</th>
+                      <th style={themedStyles.th}>Cost</th>
+                      <th style={themedStyles.th}>Margin</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(projectSummaryData?.items || []).slice(0, 8).map((project) => (
+                      <tr key={project.id}>
+                        <td style={themedStyles.td}>{project.project_code}</td>
+                        <td style={themedStyles.td}>{formatMoney(project.actual_revenue)}</td>
+                        <td style={themedStyles.td}>{formatMoney(project.actual_cost)}</td>
+                        <td style={themedStyles.td}>{formatMoney(project.margin)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div style={themedStyles.narrativeCard}>
+                Accountant toolkit:
+                {` `}Receivables {formatMoney(accountantToolkitData?.receivables || 0)},
+                {` `}Payables {formatMoney(accountantToolkitData?.payables || 0)},
+                {` `}Tax due {formatMoney(accountantToolkitData?.tax_due || 0)}.
+              </div>
+            </div>
+            <div style={themedStyles.modulePanel}>
+              <h4 style={themedStyles.moduleTitle}>Mobile and Integration Hub</h4>
+              <p style={themedStyles.graphNote}>The app now behaves like an installable mobile workspace and keeps external systems visible in one hub.</p>
+              <div style={themedStyles.adminCreateGrid}>
+                <select value={integrationForm.provider} onChange={(event) => updateIntegrationFormField("provider", event.target.value)} style={themedStyles.tableInput}>
+                  <option value="stripe">stripe</option>
+                  <option value="google_drive">google_drive</option>
+                  <option value="slack">slack</option>
+                  <option value="power_bi">power_bi</option>
+                  <option value="plaid">plaid</option>
+                </select>
+                <button type="button" onClick={connectIntegrationRecord} style={themedStyles.button} disabled={!canManagePayables}>Connect Integration</button>
+              </div>
+              <div style={themedStyles.reconciliationList}>
+                {integrations.map((integration) => (
+                  <div key={integration.id} style={themedStyles.reconciliationItem}>
+                    <div>
+                      <strong>{integration.provider}</strong>
+                      <div style={themedStyles.updateIndicator}>{integration.category} • {integration.status}</div>
+                    </div>
+                    <button type="button" onClick={() => syncIntegrationRecord(integration.id)} style={themedStyles.secondaryActionButton} disabled={!canManagePayables}>
+                      Sync
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <p style={themedStyles.updateIndicator}>Open the frontend on phone and install it from the browser menu for an app-like experience.</p>
+            </div>
           </div>
         </div>
 
@@ -2138,17 +5261,17 @@ const styles = {
     justifyContent: "center",
     alignItems: "center",
     padding: 20,
-    background: "linear-gradient(135deg, #c59ad9 0%, #9ad3d6 100%)",
+    background: "linear-gradient(140deg, #082f49 0%, #155e75 48%, #f59e0b 100%)",
   },
   authSingleCard: {
     width: "100%",
     maxWidth: 380,
-    background: "rgba(255, 255, 255, 0.08)",
-    borderRadius: 24,
+    background: "rgba(255, 255, 255, 0.1)",
+    borderRadius: 28,
     padding: 36,
-    boxShadow: "0 22px 60px rgba(33, 43, 74, 0.18)",
-    border: "1px solid rgba(255, 255, 255, 0.18)",
-    backdropFilter: "blur(12px)",
+    boxShadow: "0 24px 70px rgba(7, 13, 28, 0.32)",
+    border: "1px solid rgba(255, 255, 255, 0.22)",
+    backdropFilter: "blur(16px)",
   },
   authTitle: {
     marginTop: 2,
@@ -2197,8 +5320,8 @@ const styles = {
   authPrimaryButton: {
     width: "100%",
     border: "none",
-    borderRadius: 6,
-    background: "#3c5a80",
+    borderRadius: 10,
+    background: "linear-gradient(135deg, #0f766e 0%, #155e75 100%)",
     color: "#ffffff",
     fontWeight: 700,
     padding: "12px 14px",
@@ -2259,7 +5382,7 @@ const styles = {
   layout: {
     display: "flex",
     minHeight: "100vh",
-    fontFamily: "Segoe UI, Tahoma, Geneva, Verdana, sans-serif",
+    fontFamily: "\"IBM Plex Sans\", \"Trebuchet MS\", sans-serif",
     background: "#f4f9ff",
   },
   sidebar: {
@@ -2272,14 +5395,98 @@ const styles = {
     flex: 1,
     width: "100%",
     padding: "clamp(16px, 3vw, 32px)",
-    background: "#eaf4ff",
+    background: "radial-gradient(circle at top, #f8fafc 0%, #e0f2fe 45%, #f8fafc 100%)",
   },
   card: {
     background: "#ffffff",
     padding: 20,
-    borderRadius: 12,
+    borderRadius: 20,
     marginBottom: 16,
-    boxShadow: "0 8px 20px rgba(0,0,0,0.08)",
+    boxShadow: "0 14px 40px rgba(15, 23, 42, 0.08)",
+  },
+  heroCard: {
+    background: "linear-gradient(145deg, #0f172a 0%, #0f766e 48%, #99f6e4 120%)",
+    color: "#f8fafc",
+    padding: 24,
+    borderRadius: 24,
+    marginBottom: 16,
+    boxShadow: "0 22px 60px rgba(15, 23, 42, 0.22)",
+  },
+  heroHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 24,
+    flexWrap: "wrap",
+    alignItems: "flex-start",
+    marginBottom: 18,
+  },
+  eyebrow: {
+    margin: 0,
+    textTransform: "uppercase",
+    letterSpacing: 1.6,
+    fontSize: 12,
+    opacity: 0.78,
+  },
+  heroTitle: {
+    margin: "6px 0 10px",
+    fontSize: "clamp(28px, 4vw, 44px)",
+    lineHeight: 1.06,
+    maxWidth: 760,
+  },
+  heroAccent: {
+    color: "#fef08a",
+  },
+  heroSubtitle: {
+    margin: 0,
+    maxWidth: 720,
+    color: "rgba(248, 250, 252, 0.85)",
+    fontSize: 15,
+    lineHeight: 1.6,
+  },
+  heroActions: {
+    display: "flex",
+    gap: 10,
+    flexWrap: "wrap",
+    alignItems: "center",
+  },
+  secondaryActionButton: {
+    padding: "10px 16px",
+    borderRadius: 999,
+    border: "1px solid rgba(15, 118, 110, 0.2)",
+    background: "rgba(255, 255, 255, 0.86)",
+    color: "#0f172a",
+    fontWeight: 700,
+    cursor: "pointer",
+  },
+  heroMetricsGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+    gap: 12,
+  },
+  heroMetricCard: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+    padding: "16px 18px",
+    borderRadius: 18,
+    background: "rgba(255, 255, 255, 0.12)",
+    border: "1px solid rgba(255, 255, 255, 0.14)",
+  },
+  metricLabel: {
+    color: "inherit",
+    opacity: 0.72,
+    fontSize: 12,
+    textTransform: "uppercase",
+    letterSpacing: 1.1,
+  },
+  metricValue: {
+    fontSize: 26,
+    lineHeight: 1,
+  },
+  metricHelper: {
+    color: "inherit",
+    opacity: 0.78,
+    fontSize: 12,
   },
   chartWrap: {
     width: "100%",
@@ -2300,12 +5507,13 @@ const styles = {
   },
   button: {
     padding: "10px 20px",
-    background: "#0b1f3a",
+    background: "linear-gradient(135deg, #0f766e 0%, #0b1f3a 100%)",
     color: "white",
     border: "none",
-    borderRadius: 8,
+    borderRadius: 999,
     cursor: "pointer",
     marginTop: 8,
+    fontWeight: 700,
   },
   secondaryButton: {
     padding: "10px 16px",
@@ -2422,6 +5630,16 @@ const styles = {
     fontWeight: 700,
     color: "#0b1f3a",
   },
+  scoreBadge: {
+    minWidth: 88,
+    textAlign: "center",
+    padding: "14px 18px",
+    borderRadius: 18,
+    background: "#0f172a",
+    color: "#f8fafc",
+    fontSize: 24,
+    fontWeight: 800,
+  },
   sectionLine: {
     fontWeight: 700,
     color: "#1d4e89",
@@ -2492,6 +5710,179 @@ const styles = {
     color: "#1d4e89",
     fontSize: 12,
     whiteSpace: "nowrap",
+  },
+  moduleGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
+    gap: 16,
+  },
+  modulePanel: {
+    background: "#f8fbff",
+    border: "1px solid #dbeafe",
+    borderRadius: 18,
+    padding: 18,
+  },
+  moduleTitle: {
+    marginTop: 0,
+    marginBottom: 12,
+    color: "#0b1f3a",
+    fontSize: 18,
+  },
+  documentLineList: {
+    display: "grid",
+    gap: 10,
+    marginTop: 12,
+    marginBottom: 12,
+  },
+  integrationBanner: {
+    background: "#ecfeff",
+    border: "1px solid #99f6e4",
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 12,
+  },
+  connectionList: {
+    display: "grid",
+    gap: 10,
+    marginBottom: 12,
+  },
+  connectionCard: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 12,
+    padding: 12,
+    borderRadius: 14,
+    border: "1px solid #bfdbfe",
+    background: "#eff6ff",
+  },
+  documentLineRow: {
+    display: "grid",
+    gridTemplateColumns: "2fr repeat(2, minmax(90px, 1fr)) auto",
+    gap: 10,
+    alignItems: "center",
+  },
+  statusPill: {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: "5px 10px",
+    borderRadius: 999,
+    background: "#dbeafe",
+    color: "#1d4e89",
+    fontSize: 12,
+    fontWeight: 700,
+    textTransform: "capitalize",
+  },
+  reconciliationList: {
+    display: "grid",
+    gap: 12,
+  },
+  reconciliationItem: {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 12,
+    alignItems: "center",
+    padding: 14,
+    borderRadius: 16,
+    background: "#eff6ff",
+    border: "1px solid #bfdbfe",
+  },
+  alertGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+    gap: 12,
+  },
+  alertCard: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+    padding: 18,
+    borderRadius: 18,
+    border: "1px solid transparent",
+  },
+  alertCritical: {
+    background: "#fff1f2",
+    borderColor: "#fecdd3",
+    color: "#881337",
+  },
+  alertWarning: {
+    background: "#fff7ed",
+    borderColor: "#fdba74",
+    color: "#9a3412",
+  },
+  alertPositive: {
+    background: "#ecfeff",
+    borderColor: "#99f6e4",
+    color: "#0f766e",
+  },
+  alertPill: {
+    alignSelf: "flex-start",
+    padding: "4px 10px",
+    borderRadius: 999,
+    background: "rgba(255,255,255,0.72)",
+    fontSize: 11,
+    fontWeight: 800,
+    letterSpacing: 1,
+  },
+  alertText: {
+    margin: 0,
+    lineHeight: 1.55,
+  },
+  alertAction: {
+    margin: 0,
+    fontWeight: 700,
+  },
+  signalGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))",
+    gap: 12,
+    marginBottom: 12,
+  },
+  signalCard: {
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+    padding: 16,
+    borderRadius: 18,
+    border: "1px solid transparent",
+  },
+  signalPositive: {
+    background: "#ecfdf5",
+    borderColor: "#a7f3d0",
+  },
+  signalWarning: {
+    background: "#fffbeb",
+    borderColor: "#fcd34d",
+  },
+  signalCritical: {
+    background: "#fff1f2",
+    borderColor: "#fecdd3",
+  },
+  presetRow: {
+    display: "flex",
+    flexWrap: "wrap",
+    gap: 10,
+    marginBottom: 14,
+  },
+  presetButton: {
+    padding: "10px 16px",
+    borderRadius: 999,
+    border: "1px solid #99f6e4",
+    background: "#f0fdfa",
+    color: "#115e59",
+    cursor: "pointer",
+    fontWeight: 700,
+  },
+  narrativeCard: {
+    padding: "18px 20px",
+    borderRadius: 18,
+    background: "linear-gradient(135deg, #f8fafc 0%, #dcfce7 100%)",
+    border: "1px solid #bbf7d0",
+    color: "#14532d",
+    fontSize: 15,
+    lineHeight: 1.75,
+    marginBottom: 10,
   },
 };
 

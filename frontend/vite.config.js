@@ -22,18 +22,13 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: "dist",
       sourcemap: false,
+      chunkSizeWarningLimit: 600,
       rollupOptions: {
         output: {
-          manualChunks(id) {
-            if (id.includes("node_modules")) {
-              if (id.includes("recharts")) {
-                return "recharts";
-              }
-              if (id.includes("react")) {
-                return "react-vendor";
-              }
-              return "vendor";
-            }
+          manualChunks: {
+            "react-vendor": ["react", "react-dom"],
+            "charts-vendor": ["recharts"],
+            "banking-vendor": ["react-plaid-link"],
           },
         },
       },
