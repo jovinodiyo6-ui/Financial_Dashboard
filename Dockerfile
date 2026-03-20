@@ -13,5 +13,6 @@ COPY backend/ .
 # Create instance folder
 RUN mkdir -p instance
 
-# Run app
-CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "app:app"]
+# Run app with single worker and configurable port/timeout (avoids OOM/timeouts on small dynos)
+# Using shell form so $PORT expands in Render/Heroku-style envs.
+CMD sh -c "gunicorn -w 1 -t 120 -b 0.0.0.0:${PORT:-5000} app:app"

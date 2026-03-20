@@ -5,7 +5,7 @@ services:
     plan: free
     rootDir: backend
     buildCommand: pip install --upgrade --force-reinstall --no-cache-dir -r requirements.txt
-    startCommand: gunicorn -w 4 -b 0.0.0.0:$PORT app:app
+    startCommand: gunicorn -w 1 -t 120 --bind 0.0.0.0:$PORT app:app
     envVars:
       - key: FLASK_ENV
         value: production
@@ -13,3 +13,9 @@ services:
         generateValue: true
       - key: DATABASE_URL
         sync: false
+      - key: PORT
+        value: 10000
+      - key: WEB_CONCURRENCY
+        value: 1
+      - key: PGCONNECT_TIMEOUT
+        value: 5

@@ -7,7 +7,8 @@
     "dev:frontend": "npm --prefix frontend run dev",
     "install:frontend": "npm --prefix frontend install",
     "build": "npm run build:frontend",
-    "build:frontend": "npm --prefix frontend run build"
+    "build:frontend": "npm --prefix frontend run build",
+    "vercel-build": "npm run install:frontend && npm run build:frontend"
   },
   "devDependencies": {
     "concurrently": "^9.2.1"
