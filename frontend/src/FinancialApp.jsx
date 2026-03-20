@@ -13,7 +13,13 @@ import {
   ledgerRowsToCsv,
 } from "./financialWorkbench.js";
 
-const API_URL = (import.meta.env.VITE_API_URL || "/api").trim();
+const API_URL = (
+  import.meta.env.VITE_API_URL ||
+  // Use relative path in local dev, production fallback to Render API
+  (typeof window !== "undefined" && window.location.hostname === "localhost"
+    ? "/api"
+    : "https://financial-dashboard-8jl0.onrender.com")
+).trim().replace(/\/$/, "");
 const TOKEN_KEY = "financepro_token";
 const LAST_EMAIL_KEY = "financepro_last_email";
 const THEME_KEY = "financepro_theme";
@@ -1515,6 +1521,23 @@ export default function App() {
     [selectedCompany, statement, executiveMetrics, forecastModel],
   );
 
+  const parseApiResponse = async (response) => {
+    const contentType = (response.headers.get("content-type") || "").toLowerCase();
+    if (contentType.includes("application/json")) {
+      try {
+        return await response.json();
+      } catch {
+        return {};
+      }
+    }
+    try {
+      const text = await response.text();
+      return { error: text || "Unexpected response format" };
+    } catch {
+      return { error: "Unexpected response format" };
+    }
+  };
+
   const authorizedFetch = async (path, options = {}) => {
     const headers = {
       ...(options.headers || {}),
@@ -1522,12 +1545,7 @@ export default function App() {
     };
 
     const response = await fetch(`${API_URL}${path}`, { ...options, headers });
-    let payload = {};
-    try {
-      payload = await response.json();
-    } catch {
-      payload = {};
-    }
+    const payload = await parseApiResponse(response);
 
     if (!response.ok) {
       const message = payload.error || `Request failed (${response.status})`;
@@ -1575,7 +1593,7 @@ export default function App() {
         body: JSON.stringify({ email, password }),
       });
 
-      const data = await response.json();
+      const data = await parseApiResponse(response);
       if (!response.ok || !data.token) {
         throw new Error(data.error || "Login failed");
       }
@@ -1630,7 +1648,7 @@ export default function App() {
         body: JSON.stringify({ email: normalizedEmail }),
       });
 
-      const data = await response.json();
+      const data = await parseApiResponse(response);
       if (!response.ok) {
         throw new Error(data.error || "Failed to request password reset");
       }
@@ -1681,7 +1699,7 @@ export default function App() {
         }),
       });
 
-      const data = await response.json();
+      const data = await parseApiResponse(response);
       if (!response.ok) {
         throw new Error(data.error || "Failed to reset password");
       }
@@ -1732,7 +1750,7 @@ export default function App() {
         }),
       });
 
-      const data = await response.json();
+      const data = await parseApiResponse(response);
       if (!response.ok) {
         throw new Error(data.error || "Registration failed");
       }
@@ -1908,12 +1926,7 @@ export default function App() {
 
   const loadSystemStatus = async () => {
     const response = await fetch(`${API_URL}/system-status`);
-    let payload = {};
-    try {
-      payload = await response.json();
-    } catch {
-      payload = {};
-    }
+    const payload = await parseApiResponse(response);
 
     if (!response.ok) {
       throw new Error(payload.error || "Failed to read system status");
