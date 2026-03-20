@@ -38,6 +38,10 @@ jwt.init_app(app)
 bcrypt.init_app(app)
 CORS(app)
 
+# Ensure database tables exist on startup (idempotent for SQLite/Postgres)
+with app.app_context():
+    db.create_all()
+
 # --- Routes ---
 
 @app.route("/")
