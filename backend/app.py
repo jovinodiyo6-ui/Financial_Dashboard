@@ -79,37 +79,50 @@ def login():
 
 @app.route("/register", methods=["POST"])
 def register():
-    data = request.get_json(silent=True) or {}
-    email = (data.get("email") or "").strip().lower()
-    password = data.get("password")
-    org_name = data.get("org")
-    business_type = (data.get("business_type") or "sole_proprietor").strip()
-    partner_names = data.get("partner_names") or []
+    try:
+        data = request.get_json(silent=True) or {}
+        email = (data.get("email") or "").strip().lower()
+        password = data.get("password")
+        org_name = data.get("org")
+        business_type = (data.get("business_type") or "sole_proprietor").strip()
+        partner_names = data.get("partner_names") or []
 
-    if User.query.filter_by(email=email).first():
-        return {"error": "email already exists"}, 409
-    if business_type == "partnership" and len(partner_names) < 2:
-        return {"error": "partnerships require at least two partner names"}, 400
-        
-    hashed = bcrypt.generate_password_hash(password).decode()
-    org = Organization(name=org_name, billing_email=email)
-    db.session.add(org)
-    db.session.flush()
-    
-    company = Company(org_id=org.id, name=org_name, business_type=business_type)
-    db.session.add(company)
-    db.session.flush()
+        if not email or not password or not org_name:
+            return {"error": "email, password, and org are required"}, 400
 
-    if business_type == "partnership":
-        for idx, name in enumerate(partner_names, start=1):
-            db.session.add(CompanyPartner(company_id=company.id, name=name.strip(), display_order=idx))
-        db.session.add(CompanyOnboardingState(company_id=company.id, is_configured=True, configured_at=datetime.datetime.now(datetime.UTC)))
-    
-    user = User(email=email, password=hashed, role="owner", org_id=org.id, default_company_id=company.id)
-    db.session.add(user)
-    db.session.commit()
-    
-    return {"msg": "registered"}
+        if User.query.filter_by(email=email).first():
+            return {"error": "email already exists"}, 409
+        if business_type == "partnership" and len(partner_names) < 2:
+            return {"error": "partnerships require at least two partner names"}, 400
+
+        hashed = bcrypt.generate_password_hash(password).decode()
+        org = Organization(name=org_name, billing_email=email)
+        db.session.add(org)
+        db.session.flush()
+
+        company = Company(org_id=org.id, name=org_name, business_type=business_type)
+        db.session.add(company)
+        db.session.flush()
+
+        if business_type == "partnership":
+            for idx, name in enumerate(partner_names, start=1):
+                db.session.add(CompanyPartner(company_id=company.id, name=name.strip(), display_order=idx))
+            db.session.add(
+                CompanyOnboardingState(
+                    company_id=company.id,
+                    is_configured=True,
+                    configured_at=datetime.datetime.now(datetime.UTC),
+                )
+            )
+
+        user = User(email=email, password=hashed, role="owner", org_id=org.id, default_company_id=company.id)
+        db.session.add(user)
+        db.session.commit()
+
+        return {"msg": "registered"}, 201
+    except Exception as exc:  # surface errors instead of HTML 500
+        db.session.rollback()
+        return {"error": str(exc)}, 500
 
 @app.route("/me", methods=["GET", "DELETE"])
 @jwt_required()
