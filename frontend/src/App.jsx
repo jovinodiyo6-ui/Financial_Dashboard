@@ -2,7 +2,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { BrowserRouter, Routes, Route, Link, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 
-const API = "/api"; // Vite proxy strips /api -> Flask backend
+const API =
+  (import.meta.env.VITE_API_URL ||
+    (typeof window !== "undefined" && window.location.hostname === "localhost"
+      ? "/api"
+      : "https://financial-dashboard-8jl0.onrender.com")
+  ).trim().replace(/\/$/, "");
 const TOKEN_KEY = "financepro_token";
 
 const readToken = () => {
@@ -372,7 +377,12 @@ function Auth({ onSuccess, setToast }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const payload = await res.json();
+      let payload = {};
+      try {
+        payload = await res.json();
+      } catch {
+        payload = { error: "Unexpected response" };
+      }
       if (!res.ok) throw new Error(payload.error || "Auth failed");
       if (mode === "login") {
         onSuccess(payload.token, "Signed in");
