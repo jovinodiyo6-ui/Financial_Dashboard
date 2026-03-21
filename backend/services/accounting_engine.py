@@ -40,26 +40,118 @@ def get_company_account(company_id, account_id=None, account_code=None):
         return LedgerAccount.query.filter_by(company_id=company_id, code=str(account_code).strip()).first()
     return None
 
-def normalize_journal_lines(company, lines):
+def analyze_journal_lines(company, lines):
+    diagnostics = {
+        "can_post": False,
+        "balanced": False,
+        "line_count": len(lines) if isinstance(lines, list) else 0,
+        "debit_total": 0.0,
+        "credit_total": 0.0,
+        "difference": 0.0,
+        "blocking_issues": [],
+        "line_issues": [],
+        "top_contributors": [],
+        "error": "",
+    }
+
     if not isinstance(lines, list) or len(lines) < 2:
-        raise ValueError("journal entry requires at least two lines")
+        diagnostics["blocking_issues"].append("journal entry requires at least two lines")
+        diagnostics["error"] = diagnostics["blocking_issues"][0]
+        return diagnostics
+
+    contributors = []
+    for index, raw_line in enumerate(lines, start=1):
+        payload = raw_line or {}
+        account = get_company_account(company.id, payload.get("account_id"), payload.get("account_code"))
+        line_issue = {
+            "line_number": index,
+            "account_code": str(payload.get("account_code") or "").strip(),
+            "account_name": account.name if account else "",
+            "issues": [],
+        }
+
+        if not account:
+            line_issue["issues"].append("unknown account")
+
+        try:
+            debit = parse_money(payload.get("debit", 0), f"journal line {index} debit")
+        except ValueError as exc:
+            debit = 0.0
+            line_issue["issues"].append(str(exc))
+
+        try:
+            credit = parse_money(payload.get("credit", 0), f"journal line {index} credit")
+        except ValueError as exc:
+            credit = 0.0
+            line_issue["issues"].append(str(exc))
+
+        if debit > 0 and credit > 0:
+            line_issue["issues"].append("line cannot contain both debit and credit")
+        if debit <= 0 and credit <= 0:
+            line_issue["issues"].append("line must contain a debit or credit amount")
+
+        diagnostics["debit_total"] += debit
+        diagnostics["credit_total"] += credit
+
+        if account:
+            net_amount = round(debit - credit, 2)
+            if abs(net_amount) > 0:
+                contributors.append(
+                    {
+                        "line_number": index,
+                        "account_code": account.code,
+                        "account_name": account.name,
+                        "side": "debit" if net_amount > 0 else "credit",
+                        "amount": round(abs(net_amount), 2),
+                    }
+                )
+
+        if line_issue["issues"]:
+            diagnostics["line_issues"].append(line_issue)
+
+    diagnostics["debit_total"] = round(diagnostics["debit_total"], 2)
+    diagnostics["credit_total"] = round(diagnostics["credit_total"], 2)
+    diagnostics["difference"] = round(diagnostics["debit_total"] - diagnostics["credit_total"], 2)
+    diagnostics["balanced"] = diagnostics["difference"] == 0
+    diagnostics["top_contributors"] = sorted(
+        contributors,
+        key=lambda item: item["amount"],
+        reverse=True,
+    )[:5]
+
+    if diagnostics["line_issues"]:
+        diagnostics["blocking_issues"].extend(
+            f"line {item['line_number']}: {', '.join(item['issues'])}" for item in diagnostics["line_issues"]
+        )
+
+    if diagnostics["difference"] != 0:
+        direction = "more debits than credits" if diagnostics["difference"] > 0 else "more credits than debits"
+        diagnostics["blocking_issues"].append(
+            f"entry is out of balance by {abs(diagnostics['difference']):.2f} ({direction})"
+        )
+
+    diagnostics["can_post"] = not diagnostics["blocking_issues"]
+    if diagnostics["can_post"]:
+        diagnostics["error"] = ""
+    elif diagnostics["blocking_issues"]:
+        diagnostics["error"] = diagnostics["blocking_issues"][0]
+    else:
+        diagnostics["error"] = "journal entry cannot be posted"
+
+    return diagnostics
+
+def normalize_journal_lines(company, lines):
+    diagnostics = analyze_journal_lines(company, lines)
+    if not diagnostics["can_post"]:
+        raise ValueError(diagnostics["error"])
 
     normalized = []
-    debit_total = 0.0
-    credit_total = 0.0
 
     for index, raw_line in enumerate(lines, start=1):
         payload = raw_line or {}
         account = get_company_account(company.id, payload.get("account_id"), payload.get("account_code"))
-        if not account:
-            raise ValueError(f"journal line {index} references an unknown account")
-
         debit = parse_money(payload.get("debit", 0), f"journal line {index} debit")
         credit = parse_money(payload.get("credit", 0), f"journal line {index} credit")
-        if debit > 0 and credit > 0:
-            raise ValueError(f"journal line {index} cannot contain both debit and credit")
-        if debit <= 0 and credit <= 0:
-            raise ValueError(f"journal line {index} must contain a debit or credit amount")
 
         normalized.append(
             {
@@ -70,13 +162,7 @@ def normalize_journal_lines(company, lines):
                 "credit": credit,
             }
         )
-        debit_total += debit
-        credit_total += credit
-
-    if round(debit_total, 2) != round(credit_total, 2):
-        raise ValueError("journal entry debits and credits must balance")
-
-    return normalized, round(debit_total, 2), round(credit_total, 2)
+    return normalized, diagnostics["debit_total"], diagnostics["credit_total"]
 
 def post_journal_entry(company, user, entry_date, memo, lines, source_type="manual", source_id=None, reference=None):
     seed_chart_of_accounts(company)

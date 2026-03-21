@@ -40,11 +40,41 @@ def build_trial_balance(company):
             }
         )
 
+    difference = round(debit_total - credit_total, 2)
+    suspect_accounts = sorted(
+        (
+            {
+                "id": item["id"],
+                "code": item["code"],
+                "name": item["name"],
+                "debit_total": item["debit_total"],
+                "credit_total": item["credit_total"],
+                "net_balance": item["net_balance"],
+            }
+            for item in items
+            if abs(float(item["net_balance"] or 0)) > 0
+        ),
+        key=lambda item: abs(float(item["net_balance"] or 0)),
+        reverse=True,
+    )[:5]
+
     return {
         "items": items,
         "debit_total": round(debit_total, 2),
         "credit_total": round(credit_total, 2),
-        "balanced": round(debit_total, 2) == round(credit_total, 2),
+        "difference": difference,
+        "balanced": difference == 0,
+        "imbalance": {
+            "difference": difference,
+            "direction": (
+                "balanced"
+                if difference == 0
+                else "debits_exceed_credits"
+                if difference > 0
+                else "credits_exceed_debits"
+            ),
+            "suspect_accounts": suspect_accounts,
+        },
     }
 
 def normalized_trial_balance_amount(item):
@@ -62,8 +92,50 @@ def build_accounting_overview(company):
     return {
         "account_count": len(trial_balance["items"]),
         "journal_count": JournalEntry.query.filter_by(company_id=company.id).count(),
+        "reporting_locked": not trial_balance["balanced"],
         "trial_balance": trial_balance,
         "recent_entries": [serialize_journal_entry(entry) for entry in recent_entries],
+    }
+
+
+def build_account_register(company, account):
+    lines = (
+        db.session.query(JournalLine, JournalEntry)
+        .join(JournalEntry, JournalLine.journal_entry_id == JournalEntry.id)
+        .filter(
+            JournalEntry.company_id == company.id,
+            JournalEntry.status.in_(["posted", "reversed"]),
+            JournalLine.account_id == account.id,
+        )
+        .order_by(JournalEntry.entry_date.asc(), JournalEntry.id.asc(), JournalLine.line_number.asc(), JournalLine.id.asc())
+        .all()
+    )
+
+    running_balance = 0.0
+    items = []
+    for line, entry in lines:
+        signed_amount = float(line.debit or 0) - float(line.credit or 0)
+        if account.normal_balance == "credit":
+            signed_amount = -signed_amount
+        running_balance = round(running_balance + signed_amount, 2)
+        items.append(
+            {
+                "entry_id": entry.id,
+                "entry_number": entry.entry_number,
+                "entry_date": iso_date(entry.entry_date),
+                "memo": entry.memo,
+                "reference": entry.reference or "",
+                "description": line.description or "",
+                "debit": round(float(line.debit or 0), 2),
+                "credit": round(float(line.credit or 0), 2),
+                "running_balance": running_balance,
+            }
+        )
+
+    return {
+        "account": serialize_ledger_account(account),
+        "ending_balance": running_balance,
+        "items": items,
     }
 
 def serialize_project(project):

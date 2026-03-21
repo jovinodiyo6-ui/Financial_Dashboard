@@ -3,12 +3,24 @@ from flask_cors import CORS
 from flask_jwt_extended import jwt_required, create_access_token, get_jwt_identity
 from extensions import db, jwt, bcrypt
 from models import *
-from services.accounting_engine import post_journal_entry, get_company_account, serialize_journal_entry
+from services.accounting_engine import (
+    post_journal_entry,
+    get_company_account,
+    serialize_journal_entry,
+    seed_chart_of_accounts,
+    serialize_ledger_account,
+    analyze_journal_lines,
+)
 from services.invoice_service import create_invoice, serialize_invoice, apply_customer_payment
 from services.bill_service import create_bill, serialize_bill, apply_vendor_payment
 from services.reporting_service import (
-    build_accounting_overview, build_trial_balance, build_inventory_summary, 
-    build_workforce_overview, build_project_summary, aggregate_org_reports
+    build_account_register,
+    build_accounting_overview,
+    build_trial_balance,
+    build_inventory_summary,
+    build_workforce_overview,
+    build_project_summary,
+    aggregate_org_reports,
 )
 from services.finance_service import calculate_finance_summary, calculate_tax_summary, get_or_create_tax_profile
 from services.ai_cfo_service import build_ai_cfo_overview, answer_ai_cfo_question
@@ -83,6 +95,18 @@ def _require_user():
     if not user:
         return None, ({"error": "invalid token"}, 401)
     return user, None
+
+
+def _resolve_company_for_user(user, company_id=None):
+    target_company_id = company_id or request.args.get("company_id")
+    if not target_company_id:
+        payload = request.get_json(silent=True) or {}
+        target_company_id = payload.get("company_id")
+    target_company_id = target_company_id or user.default_company_id
+    company = Company.query.filter_by(id=target_company_id, org_id=user.org_id).first()
+    if not company:
+        return None
+    return company
 
 
 @app.route("/login", methods=["POST"])
@@ -378,8 +402,156 @@ def accounting_overview():
     user, error = _require_user()
     if error:
         return error
-    company = Company.query.get(user.default_company_id)
+    company = _resolve_company_for_user(user)
     return build_accounting_overview(company)
+
+
+@app.route("/finance/chart-of-accounts", methods=["GET", "POST"])
+@jwt_required()
+def chart_of_accounts():
+    user, error = _require_user()
+    if error:
+        return error
+    company = _resolve_company_for_user(user)
+    if not company:
+        return {"error": "company not found"}, 404
+
+    if request.method == "GET":
+        seed_chart_of_accounts(company)
+        db.session.commit()
+        accounts = (
+            LedgerAccount.query.filter_by(company_id=company.id)
+            .order_by(LedgerAccount.code.asc(), LedgerAccount.id.asc())
+            .all()
+        )
+        return {"items": [serialize_ledger_account(account) for account in accounts]}
+
+    data = request.get_json(silent=True) or {}
+    code = (data.get("code") or "").strip()
+    name = (data.get("name") or "").strip()
+    if not code or not name:
+        return {"error": "code and name are required"}, 400
+
+    existing = LedgerAccount.query.filter_by(company_id=company.id, code=code).first()
+    if existing:
+        return {"error": "account code already exists"}, 409
+
+    account = LedgerAccount(
+        org_id=company.org_id,
+        company_id=company.id,
+        code=code,
+        name=name,
+        category=(data.get("category") or "expense").strip(),
+        subtype=(data.get("subtype") or "").strip() or None,
+        normal_balance=(data.get("normal_balance") or "debit").strip(),
+        description=(data.get("description") or "").strip() or None,
+        is_system=False,
+        is_active=True,
+    )
+    db.session.add(account)
+    db.session.commit()
+    return serialize_ledger_account(account), 201
+
+
+@app.route("/finance/chart-of-accounts/seed", methods=["POST"])
+@jwt_required()
+def seed_chart_of_accounts_route():
+    user, error = _require_user()
+    if error:
+        return error
+    company = _resolve_company_for_user(user)
+    if not company:
+        return {"error": "company not found"}, 404
+
+    created = seed_chart_of_accounts(company)
+    db.session.commit()
+    accounts = (
+        LedgerAccount.query.filter_by(company_id=company.id)
+        .order_by(LedgerAccount.code.asc(), LedgerAccount.id.asc())
+        .all()
+    )
+    return {"created": created, "items": [serialize_ledger_account(account) for account in accounts]}
+
+
+@app.route("/finance/journal-entries/validate", methods=["POST"])
+@jwt_required()
+def validate_journal_entry():
+    user, error = _require_user()
+    if error:
+        return error
+    company = _resolve_company_for_user(user)
+    if not company:
+        return {"error": "company not found"}, 404
+
+    payload = request.get_json(silent=True) or {}
+    seed_chart_of_accounts(company)
+    diagnostics = analyze_journal_lines(company, payload.get("lines"))
+    return diagnostics
+
+
+@app.route("/finance/journal-entries", methods=["GET", "POST"])
+@jwt_required()
+def journal_entries():
+    user, error = _require_user()
+    if error:
+        return error
+    company = _resolve_company_for_user(user)
+    if not company:
+        return {"error": "company not found"}, 404
+
+    if request.method == "GET":
+        entries = (
+            JournalEntry.query.filter_by(company_id=company.id)
+            .order_by(JournalEntry.entry_date.desc(), JournalEntry.id.desc())
+            .limit(50)
+            .all()
+        )
+        return {"items": [serialize_journal_entry(entry) for entry in entries]}
+
+    payload = request.get_json(silent=True) or {}
+    entry_date = parse_iso_date(payload.get("entry_date"), "entry_date", today_utc_date())
+    diagnostics = analyze_journal_lines(company, payload.get("lines"))
+    if not diagnostics["can_post"]:
+        return {"error": diagnostics["error"], "diagnostics": diagnostics}, 400
+
+    entry = post_journal_entry(
+        company,
+        user,
+        entry_date=entry_date,
+        memo=(payload.get("memo") or "").strip() or "Manual journal entry",
+        lines=payload.get("lines") or [],
+        source_type="manual",
+        reference=(payload.get("reference") or "").strip() or None,
+    )
+    db.session.commit()
+    response = serialize_journal_entry(entry)
+    response["diagnostics"] = diagnostics
+    return response, 201
+
+
+@app.route("/finance/register")
+@jwt_required()
+def account_register():
+    user, error = _require_user()
+    if error:
+        return error
+    company = _resolve_company_for_user(user)
+    if not company:
+        return {"error": "company not found"}, 404
+
+    seed_chart_of_accounts(company)
+    account_id = request.args.get("account_id")
+    account_code = request.args.get("account_code")
+    account = get_company_account(company.id, account_id=account_id, account_code=account_code)
+    if not account:
+        account = (
+            LedgerAccount.query.filter_by(company_id=company.id)
+            .order_by(LedgerAccount.code.asc(), LedgerAccount.id.asc())
+            .first()
+        )
+    if not account:
+        return {"error": "account not found"}, 404
+    return build_account_register(company, account)
 
 @app.route("/ai-cfo/overview")
 @jwt_required()

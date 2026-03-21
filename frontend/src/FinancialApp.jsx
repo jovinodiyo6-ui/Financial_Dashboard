@@ -1016,6 +1016,7 @@ export default function App() {
   const [projectCostForm, setProjectCostForm] = useState(() => createProjectCostFormState());
   const [integrationForm, setIntegrationForm] = useState(() => createIntegrationFormState());
   const [selectedRegisterAccountId, setSelectedRegisterAccountId] = useState("");
+  const [journalValidation, setJournalValidation] = useState(null);
   const isDarkMode = themeMode === "dark";
 
   const availableQuickEntries = useMemo(
@@ -1522,6 +1523,33 @@ export default function App() {
     () => buildBoardNarrative(selectedCompany?.name, statement, executiveMetrics, forecastModel),
     [selectedCompany, statement, executiveMetrics, forecastModel],
   );
+
+  const journalDraftSummary = useMemo(() => {
+    const lineSummaries = (journalForm.lines || []).map((line, index) => {
+      const debit = Number(line.debit || 0);
+      const credit = Number(line.credit || 0);
+      return {
+        line_number: index + 1,
+        account_code: (line.account_code || "").trim(),
+        debit: Number.isFinite(debit) ? debit : 0,
+        credit: Number.isFinite(credit) ? credit : 0,
+      };
+    });
+    const debitTotal = lineSummaries.reduce((sum, line) => sum + line.debit, 0);
+    const creditTotal = lineSummaries.reduce((sum, line) => sum + line.credit, 0);
+    const difference = Number((debitTotal - creditTotal).toFixed(2));
+    const incompleteLines = lineSummaries
+      .filter((line) => !line.account_code || (line.debit <= 0 && line.credit <= 0) || (line.debit > 0 && line.credit > 0))
+      .map((line) => line.line_number);
+
+    return {
+      debitTotal: Number(debitTotal.toFixed(2)),
+      creditTotal: Number(creditTotal.toFixed(2)),
+      difference,
+      balanced: Math.abs(difference) < 0.01,
+      incompleteLines,
+    };
+  }, [journalForm]);
 
   const parseApiResponse = async (response) => {
     const contentType = (response.headers.get("content-type") || "").toLowerCase();
@@ -2617,6 +2645,11 @@ export default function App() {
     setIntegrationForm((current) => ({ ...current, [key]: value }));
   };
 
+  const updateJournalFormField = (key, value) => {
+    setJournalValidation(null);
+    setJournalForm((current) => ({ ...current, [key]: value }));
+  };
+
   const updateDocumentItem = (setter, index, key, value) => {
     setter((current) => ({
       ...current,
@@ -2625,6 +2658,7 @@ export default function App() {
   };
 
   const updateJournalLine = (index, key, value) => {
+    setJournalValidation(null);
     setJournalForm((current) => ({
       ...current,
       lines: current.lines.map((line, lineIndex) => (lineIndex === index ? { ...line, [key]: value } : line)),
@@ -2632,10 +2666,12 @@ export default function App() {
   };
 
   const addJournalLine = () => {
+    setJournalValidation(null);
     setJournalForm((current) => ({ ...current, lines: [...current.lines, createJournalLine()] }));
   };
 
   const removeJournalLine = (index) => {
+    setJournalValidation(null);
     setJournalForm((current) => ({
       ...current,
       lines: current.lines.length > 2 ? current.lines.filter((_, lineIndex) => lineIndex !== index) : current.lines,
@@ -2919,8 +2955,45 @@ export default function App() {
     }
   };
 
+  const validateManualJournal = async (announceSuccess = true) => {
+    try {
+      const payload = await authorizedFetch("/finance/journal-entries/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...journalForm,
+          company_id: selectedCompanyId || undefined,
+          lines: journalForm.lines.map((line) => ({
+            ...line,
+            debit: Number(line.debit || 0),
+            credit: Number(line.credit || 0),
+          })),
+        }),
+      });
+      setJournalValidation(payload);
+      if (!payload.can_post) {
+        setErrorMessage(payload.error || "Journal entry is out of balance.");
+        setInfoMessage("");
+        return false;
+      }
+      setErrorMessage("");
+      if (announceSuccess) {
+        setInfoMessage("Journal entry is balanced and ready to post.");
+      }
+      return true;
+    } catch (error) {
+      setErrorMessage(error.message || "Failed to validate journal entry.");
+      setInfoMessage("");
+      return false;
+    }
+  };
+
   const postManualJournal = async () => {
     try {
+      const canPost = await validateManualJournal(false);
+      if (!canPost) {
+        return;
+      }
       await authorizedFetch("/finance/journal-entries", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2935,6 +3008,7 @@ export default function App() {
         }),
       });
       setJournalForm(createJournalFormState());
+      setJournalValidation(null);
       await loadFinanceWorkspace();
       setInfoMessage("Journal entry posted.");
       setErrorMessage("");
@@ -5501,6 +5575,11 @@ export default function App() {
               <div>{accountingOverviewData?.trial_balance?.balanced ? "Balanced" : "Out of balance"}</div>
             </div>
           </div>
+          {!accountingOverviewData?.trial_balance?.balanced ? (
+            <p style={themedStyles.errorText}>
+              Reporting is locked until debits and credits balance. Difference: {formatMoney(accountingOverviewData?.trial_balance?.difference || 0)}
+            </p>
+          ) : null}
           <div style={themedStyles.moduleGrid}>
             <div style={themedStyles.modulePanel}>
               <h4 style={themedStyles.moduleTitle}>Chart of Accounts</h4>
@@ -5550,10 +5629,34 @@ export default function App() {
             <div style={themedStyles.modulePanel}>
               <h4 style={themedStyles.moduleTitle}>Manual Journal</h4>
               <div style={themedStyles.adminCreateGrid}>
-                <input placeholder="Memo" value={journalForm.memo} onChange={(event) => setJournalForm((current) => ({ ...current, memo: event.target.value }))} style={themedStyles.tableInput} />
-                <input type="date" value={journalForm.entry_date} onChange={(event) => setJournalForm((current) => ({ ...current, entry_date: event.target.value }))} style={themedStyles.tableInput} />
-                <input placeholder="Reference" value={journalForm.reference} onChange={(event) => setJournalForm((current) => ({ ...current, reference: event.target.value }))} style={themedStyles.tableInput} />
+                <input placeholder="Memo" value={journalForm.memo} onChange={(event) => updateJournalFormField("memo", event.target.value)} style={themedStyles.tableInput} />
+                <input type="date" value={journalForm.entry_date} onChange={(event) => updateJournalFormField("entry_date", event.target.value)} style={themedStyles.tableInput} />
+                <input placeholder="Reference" value={journalForm.reference} onChange={(event) => updateJournalFormField("reference", event.target.value)} style={themedStyles.tableInput} />
               </div>
+              <div style={themedStyles.kpiGrid}>
+                <div style={themedStyles.kpiItem}>
+                  <strong>Debits</strong>
+                  <div>{formatMoney(journalDraftSummary.debitTotal)}</div>
+                </div>
+                <div style={themedStyles.kpiItem}>
+                  <strong>Credits</strong>
+                  <div>{formatMoney(journalDraftSummary.creditTotal)}</div>
+                </div>
+                <div style={themedStyles.kpiItem}>
+                  <strong>Variance</strong>
+                  <div>{formatMoney(journalDraftSummary.difference)}</div>
+                </div>
+              </div>
+              {!journalDraftSummary.balanced ? (
+                <p style={themedStyles.errorText}>
+                  Out-of-balance blocker: entry is off by {formatMoney(journalDraftSummary.difference)}.
+                </p>
+              ) : null}
+              {journalDraftSummary.incompleteLines.length > 0 ? (
+                <p style={themedStyles.warningText}>
+                  Check lines {journalDraftSummary.incompleteLines.join(", ")}. Each line needs an account and either a debit or credit amount.
+                </p>
+              ) : null}
               <div style={themedStyles.documentLineList}>
                 {journalForm.lines.map((line, index) => (
                   <div key={`journal-line-${index}`} style={themedStyles.documentLineRow}>
@@ -5566,8 +5669,42 @@ export default function App() {
               </div>
               <div style={themedStyles.actionRow}>
                 <button type="button" onClick={addJournalLine} style={themedStyles.secondaryActionButton}>Add Line</button>
-                <button type="button" onClick={postManualJournal} style={themedStyles.button} disabled={!canManagePayables || !hasProPlan}>Post Journal</button>
+                <button type="button" onClick={() => validateManualJournal(true)} style={themedStyles.secondaryActionButton} disabled={!canManagePayables || !hasProPlan}>
+                  Analyze Balance
+                </button>
+                <button
+                  type="button"
+                  onClick={postManualJournal}
+                  style={themedStyles.button}
+                  disabled={!canManagePayables || !hasProPlan || !journalDraftSummary.balanced || journalDraftSummary.incompleteLines.length > 0}
+                >
+                  Post Journal
+                </button>
               </div>
+              {journalValidation?.top_contributors?.length ? (
+                <div style={themedStyles.tableWrap}>
+                  <table style={themedStyles.table}>
+                    <thead>
+                      <tr>
+                        <th style={themedStyles.th}>Line</th>
+                        <th style={themedStyles.th}>Account</th>
+                        <th style={themedStyles.th}>Side</th>
+                        <th style={themedStyles.th}>Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {journalValidation.top_contributors.map((item) => (
+                        <tr key={`${item.line_number}-${item.account_code}`}>
+                          <td style={themedStyles.td}>{item.line_number}</td>
+                          <td style={themedStyles.td}>{item.account_code} - {item.account_name}</td>
+                          <td style={themedStyles.td}>{item.side}</td>
+                          <td style={themedStyles.td}>{formatMoney(item.amount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
               <div style={themedStyles.tableWrap}>
                 <table style={themedStyles.table}>
                   <thead>
