@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import GuidedEntryWizard from "../components/GuidedEntryWizard";
 import Loader from "../components/Loader";
 import { useApi } from "../hooks/useApi";
 import { useToast } from "../hooks/useToast";
@@ -204,6 +205,8 @@ export default function Entries() {
           </span>
         </article>
       </div>
+
+      <GuidedEntryWizard onSubmitted={load} />
 
       <div className="dashboard-grid">
         <section className="panel stack">

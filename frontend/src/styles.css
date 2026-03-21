@@ -676,7 +676,9 @@ a {
 .dashboard-grid,
 .transaction-grid,
 .form-grid,
-.chip-row {
+.chip-row,
+.wizard-grid,
+.partner-grid {
   display: grid;
   gap: 1rem;
 }
@@ -695,6 +697,29 @@ a {
 
 .chip-row {
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.wizard-grid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.partner-grid {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.partner-card {
+  display: grid;
+  gap: 0.85rem;
+  padding: 1rem;
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.helper-note {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.7;
 }
 
 .doc-list {

@@ -67,6 +67,14 @@ export const createJournalEntry = (first, second) => {
 
 export const getJournalEntries = (client = api) => client("/finance/journal-entries");
 
+export const createGuidedEntries = (first, second) => {
+  const [client, payload] = resolveClientArgs(first, second);
+  return client("/finance/guided-entries", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+};
+
 export const getTaxSummary = (client = api) => client("/finance/tax/summary");
 
 export const getTaxProfile = (client = api) => client("/finance/tax/profile");

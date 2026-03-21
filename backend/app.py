@@ -24,6 +24,7 @@ from services.reporting_service import (
 )
 from services.finance_service import calculate_finance_summary, calculate_tax_summary, get_or_create_tax_profile
 from services.ai_cfo_service import build_ai_cfo_overview, answer_ai_cfo_question
+from services.guided_entry_service import post_guided_entries
 from services.ingestion_service import read_external_dataframe, normalize_ledger_dataframe, calc
 from services.common import refresh_finance_documents, generate_document_number
 from middleware import get_user_from_token, roles_required, plan_required, get_plan_definition
@@ -1149,6 +1150,39 @@ def journal_entries():
     response = serialize_journal_entry(entry)
     response["diagnostics"] = diagnostics
     return response, 201
+
+
+@app.route("/finance/guided-entries", methods=["POST"])
+@jwt_required()
+def guided_entries():
+    user, error = _require_user()
+    if error:
+        return error
+    company = _resolve_company_for_user(user)
+    if not company:
+        return {"error": "company not found"}, 404
+
+    payload = request.get_json(silent=True) or {}
+    entry_date = parse_iso_date(payload.get("entry_date"), "entry_date", today_utc_date())
+    business_type = (payload.get("business_type") or company.business_type or "sole_proprietor").strip().lower()
+    try:
+        entries = post_guided_entries(
+            company,
+            user,
+            entry_date=entry_date,
+            business_type=business_type,
+            inputs=payload.get("inputs") or {},
+        )
+    except ValueError as exc:
+        db.session.rollback()
+        return {"error": str(exc)}, 400
+
+    db.session.commit()
+    return {
+        "business_type": business_type,
+        "created_count": len(entries),
+        "entries": entries,
+    }, 201
 
 
 @app.route("/finance/register")

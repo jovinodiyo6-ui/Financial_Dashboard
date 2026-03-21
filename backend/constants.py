@@ -12,7 +12,7 @@ VALID_RECONCILIATION_ACTIONS = {"suggest_account", "flag_exception"}
 VALID_TAX_FILING_TYPES = {"indirect_tax", "income_tax", "payroll_tax"}
 VALID_PAY_TYPES = {"hourly", "salary"}
 VALID_INTEGRATION_STATUSES = {"available", "connected", "attention"}
-VALID_BUSINESS_TYPES = {"sole_proprietor", "partnership", "manufacturing"}
+VALID_BUSINESS_TYPES = {"sole_proprietor", "partnership", "manufacturing", "company"}
 JOB_TYPES = {"finance_digest", "tax_filing_package", "accountant_brief"}
 JOB_TERMINAL_STATUSES = {"completed", "failed"}
 

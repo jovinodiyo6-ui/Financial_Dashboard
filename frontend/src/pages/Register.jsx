@@ -85,6 +85,7 @@ export default function Register() {
               <option value="sole_proprietor">Sole proprietor</option>
               <option value="partnership">Partnership</option>
               <option value="manufacturing">Manufacturing</option>
+              <option value="company">Company</option>
             </select>
           </label>
 
