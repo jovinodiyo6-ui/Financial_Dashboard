@@ -98,7 +98,7 @@ export function createApiClient({ getToken, onUnauthorized } = {}) {
       timeoutMs = DEFAULT_TIMEOUT_MS,
       headers,
       body,
-      credentials = "include",
+      credentials = "same-origin",
       ...rest
     } = options;
 
