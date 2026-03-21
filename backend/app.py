@@ -42,6 +42,15 @@ CORS(app)
 with app.app_context():
     db.create_all()
 
+# Return JSON for unhandled exceptions (avoids HTML 500 pages)
+@app.errorhandler(Exception)
+def handle_exception(err):
+    try:
+        db.session.rollback()
+    except Exception:
+        pass
+    return {"error": str(err)}, 500
+
 # --- Routes ---
 
 @app.route("/")
