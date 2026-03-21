@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from "rea
 import ErrorBoundary from "./components/ErrorBoundary";
 import Navbar from "./components/Navbar";
 import Loader from "./components/Loader";
+import { ThemeProvider } from "./context/ThemeContext";
 import { ToastProvider } from "./context/ToastContext";
 import { useAuth } from "./hooks/useAuth";
 import { AuthProvider } from "./store/authStore";
@@ -12,6 +13,7 @@ import Landing from "./pages/Landing";
 import Login from "./pages/Login";
 import Reports from "./pages/Reports";
 import Register from "./pages/Register";
+import Settings from "./pages/Settings";
 import Setup from "./pages/Setup";
 
 function resolveWorkspacePath(user) {
@@ -31,7 +33,7 @@ function ProtectedLayout() {
   }
 
   const isConfigured = Boolean(user?.default_company?.onboarding_complete);
-  if (!isConfigured && location.pathname !== "/setup") {
+  if (!isConfigured && !["/setup", "/settings"].includes(location.pathname)) {
     return <Navigate to="/setup" replace />;
   }
   if (isConfigured && location.pathname === "/setup") {
@@ -92,6 +94,7 @@ function AppRoutes() {
         <Route path="/reports" element={<Reports />} />
         <Route path="/entries" element={<Entries />} />
         <Route path="/billing" element={<Billing />} />
+        <Route path="/settings" element={<Settings />} />
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />
@@ -103,11 +106,13 @@ export default function App() {
   return (
     <BrowserRouter>
       <ErrorBoundary>
-        <ToastProvider>
-          <AuthProvider>
-            <AppRoutes />
-          </AuthProvider>
-        </ToastProvider>
+        <ThemeProvider>
+          <ToastProvider>
+            <AuthProvider>
+              <AppRoutes />
+            </AuthProvider>
+          </ToastProvider>
+        </ThemeProvider>
       </ErrorBoundary>
     </BrowserRouter>
   );
