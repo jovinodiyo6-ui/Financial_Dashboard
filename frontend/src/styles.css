@@ -17,6 +17,23 @@
   font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
 }
 
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #07161d;
+  --panel: rgba(10, 23, 30, 0.88);
+  --panel-strong: #10232d;
+  --text: #edf5f7;
+  --muted: #a6bcc5;
+  --line: rgba(173, 210, 220, 0.14);
+  --brand: #34d399;
+  --brand-strong: #a7f3d0;
+  --accent: #fbbf24;
+  --danger: #fca5a5;
+  --danger-soft: rgba(127, 29, 29, 0.3);
+  --success-soft: rgba(6, 78, 59, 0.4);
+  --shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -34,6 +51,13 @@ body {
     radial-gradient(circle at top left, rgba(15, 118, 110, 0.16), transparent 34%),
     radial-gradient(circle at bottom right, rgba(245, 158, 11, 0.16), transparent 28%),
     linear-gradient(180deg, #f8fbfb 0%, #edf6f6 48%, #e7f0f2 100%);
+}
+
+:root[data-theme="dark"] body {
+  background:
+    radial-gradient(circle at top left, rgba(52, 211, 153, 0.12), transparent 34%),
+    radial-gradient(circle at bottom right, rgba(251, 191, 36, 0.1), transparent 28%),
+    linear-gradient(180deg, #081118 0%, #0d1b23 48%, #10232d 100%);
 }
 
 button,
@@ -276,6 +300,7 @@ a {
 .ghost-button,
 .inline-button,
 .chip-button,
+.danger-button,
 .text-button,
 .toast {
   transition:
@@ -288,7 +313,8 @@ a {
 .primary-button,
 .ghost-button,
 .inline-button,
-.chip-button {
+.chip-button,
+.danger-button {
   border-radius: 999px;
   border: none;
   padding: 0.85rem 1.15rem;
@@ -305,6 +331,11 @@ a {
 .chip-button {
   background: rgba(15, 118, 110, 0.08);
   color: var(--brand-strong);
+}
+
+.danger-button {
+  background: linear-gradient(135deg, #b91c1c 0%, #7f1d1d 100%);
+  color: white;
 }
 
 .ghost-button--light {
@@ -324,6 +355,7 @@ a {
 .ghost-button:hover,
 .inline-button:hover,
 .chip-button:hover,
+.danger-button:hover,
 .toast:hover {
   transform: translateY(-1px);
 }
@@ -331,7 +363,8 @@ a {
 .primary-button:disabled,
 .ghost-button:disabled,
 .inline-button:disabled,
-.chip-button:disabled {
+.chip-button:disabled,
+.danger-button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
   transform: none;
@@ -662,6 +695,7 @@ a {
   position: sticky;
   top: 0;
   z-index: 20;
+  position: sticky;
 }
 
 .topbar__brand,
@@ -692,6 +726,26 @@ a {
 .topbar__meta {
   color: rgba(248, 250, 252, 0.8);
   font-size: 0.9rem;
+}
+
+.account-popover {
+  position: absolute;
+  top: calc(100% + 0.75rem);
+  right: 1rem;
+  width: min(420px, calc(100vw - 2rem));
+  display: grid;
+  gap: 1rem;
+  padding: 1.1rem;
+  border-radius: 24px;
+  border: 1px solid var(--line);
+  background: var(--panel-strong);
+  box-shadow: var(--shadow);
+  color: var(--text);
+}
+
+.account-popover__header {
+  display: grid;
+  gap: 0.25rem;
 }
 
 .dashboard-grid,
@@ -903,5 +957,10 @@ a {
 
   .topbar__meta {
     word-break: break-all;
+  }
+
+  .account-popover {
+    position: static;
+    width: 100%;
   }
 }

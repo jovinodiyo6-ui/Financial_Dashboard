@@ -21,5 +21,14 @@ export const registerRequest = (first, second) => {
 
 export const getMe = (client = api) => client("/me");
 
+export const deleteAccountRequest = (first, second) => {
+  const [client, payload] = resolveClientArgs(first, second);
+  return client("/me", {
+    method: "DELETE",
+    body: JSON.stringify(payload),
+  });
+};
+
 export const login = loginRequest;
 export const register = registerRequest;
+export const deleteAccount = deleteAccountRequest;
