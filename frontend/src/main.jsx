@@ -11,8 +11,21 @@ ReactDOM.createRoot(document.getElementById("root")).render(
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch(() => {
-      // Ignore service worker registration failures in local/private contexts.
+    let refreshing = false;
+
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (refreshing) {
+        return;
+      }
+      refreshing = true;
+      window.location.reload();
     });
+
+    navigator.serviceWorker
+      .register("/sw.js", { updateViaCache: "none" })
+      .then((registration) => registration.update().catch(() => undefined))
+      .catch(() => {
+        // Ignore service worker registration failures in local/private contexts.
+      });
   });
 }
