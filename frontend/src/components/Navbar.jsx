@@ -24,6 +24,9 @@ export default function Navbar() {
             <NavLink to="/app" end className={({ isActive }) => `topbar__link${isActive ? " topbar__link--active" : ""}`}>
               Dashboard
             </NavLink>
+            <NavLink to="/reports" className={({ isActive }) => `topbar__link${isActive ? " topbar__link--active" : ""}`}>
+              Reports
+            </NavLink>
             <NavLink to="/entries" className={({ isActive }) => `topbar__link${isActive ? " topbar__link--active" : ""}`}>
               Entries
             </NavLink>

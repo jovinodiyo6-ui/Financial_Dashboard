@@ -106,7 +106,7 @@ export default function Setup() {
         inputs,
       });
       await refreshUser();
-      navigate("/app", { replace: true });
+      navigate("/reports", { replace: true });
       return result;
     } finally {
       setSubmittingProfile(false);

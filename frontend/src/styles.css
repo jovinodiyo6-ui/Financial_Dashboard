@@ -694,7 +694,8 @@ a {
 .form-grid,
 .chip-row,
 .wizard-grid,
-.partner-grid {
+.partner-grid,
+.report-grid {
   display: grid;
   gap: 1rem;
 }
@@ -721,6 +722,10 @@ a {
 
 .partner-grid {
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.report-grid {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
 }
 
 .partner-card {
@@ -850,7 +855,8 @@ a {
   .landing-shell,
   .app-shell,
   .content-grid,
-  .dashboard-grid {
+  .dashboard-grid,
+  .report-grid {
     grid-template-columns: 1fr;
   }
 

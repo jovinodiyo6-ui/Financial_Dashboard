@@ -10,6 +10,7 @@ import Dashboard from "./pages/Dashboard";
 import Entries from "./pages/Entries";
 import Landing from "./pages/Landing";
 import Login from "./pages/Login";
+import Reports from "./pages/Reports";
 import Register from "./pages/Register";
 import Setup from "./pages/Setup";
 
@@ -88,6 +89,7 @@ function AppRoutes() {
       <Route element={<ProtectedLayout />}>
         <Route path="/setup" element={<Setup />} />
         <Route path="/app" element={<Dashboard />} />
+        <Route path="/reports" element={<Reports />} />
         <Route path="/entries" element={<Entries />} />
         <Route path="/billing" element={<Billing />} />
       </Route>
