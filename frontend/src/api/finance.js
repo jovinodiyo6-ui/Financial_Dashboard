@@ -5,6 +5,8 @@ const resolveClientArgs = (first, second) =>
 
 export const getDashboard = (client = api) => client("/finance/summary");
 
+export const getFinancialStatements = (client = api) => client("/finance/statements");
+
 export const getInvoices = (client = api) => client("/finance/invoices");
 
 export const createInvoice = (first, second) => {

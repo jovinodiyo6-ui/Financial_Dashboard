@@ -500,6 +500,15 @@ a {
   border-bottom: none;
 }
 
+.statement-total {
+  font-weight: 700;
+}
+
+.forecast-stack {
+  display: grid;
+  gap: 0;
+}
+
 .alert-card,
 .diagnostic-card,
 .empty-state {
@@ -589,6 +598,13 @@ a {
   display: flex;
   gap: 0.75rem;
   flex-wrap: wrap;
+}
+
+.partner-name-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: end;
 }
 
 .journal-line {
@@ -860,6 +876,10 @@ a {
   .doc-row {
     flex-direction: column;
     align-items: start;
+  }
+
+  .partner-name-row {
+    grid-template-columns: 1fr;
   }
 
   .journal-line {

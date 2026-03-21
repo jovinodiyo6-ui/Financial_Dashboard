@@ -93,17 +93,34 @@ const moneyField = (label, value, onChange, key) => (
   </label>
 );
 
-export default function GuidedEntryWizard({ onSubmitted }) {
+export default function GuidedEntryWizard({
+  onSubmitted,
+  companyOverride = null,
+  onSubmitData = null,
+  submitLabel = "Create Guided Entries",
+  title = "Guided Inputs",
+  subtitle = "wizard",
+  intro = "Enter business facts and the system will convert them into journal entries behind the scenes, then feed the ledger and statements.",
+}) {
   const { companies, finance } = useApi();
   const { user } = useAuth();
   const toast = useToast();
-  const [company, setCompany] = useState(null);
+  const [loadedCompany, setLoadedCompany] = useState(companyOverride);
   const [form, setForm] = useState(createGuidedState(null));
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!companyOverride);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
+  const company = companyOverride || loadedCompany;
+
   const loadCompany = async () => {
+    if (companyOverride) {
+      setLoadedCompany(companyOverride);
+      setForm(createGuidedState(companyOverride));
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     setError("");
     try {
@@ -111,7 +128,7 @@ export default function GuidedEntryWizard({ onSubmitted }) {
       const selected =
         (Array.isArray(items) ? items : []).find((item) => item.id === user?.default_company_id) ||
         (Array.isArray(items) ? items[0] : null);
-      setCompany(selected || null);
+      setLoadedCompany(selected || null);
       setForm(createGuidedState(selected));
     } catch (err) {
       setError(err.message || "Failed to load company setup.");
@@ -123,7 +140,7 @@ export default function GuidedEntryWizard({ onSubmitted }) {
 
   useEffect(() => {
     loadCompany();
-  }, [user?.default_company_id]);
+  }, [user?.default_company_id, companyOverride?.id, companyOverride?.business_type, (companyOverride?.partner_names || []).join("|")]);
 
   const businessType = company?.business_type || "sole_proprietor";
   const heading = useMemo(() => businessTypeLabels[businessType] || "Business", [businessType]);
@@ -151,11 +168,18 @@ export default function GuidedEntryWizard({ onSubmitted }) {
     setError("");
     try {
       const { entry_date, ...inputs } = form;
-      const payload = await finance.createGuidedEntries({
-        entry_date,
-        business_type: businessType,
-        inputs,
-      });
+      const payload = onSubmitData
+        ? await onSubmitData({
+            company,
+            entry_date,
+            business_type: businessType,
+            inputs,
+          })
+        : await finance.createGuidedEntries({
+            entry_date,
+            business_type: businessType,
+            inputs,
+          });
       toast.success(
         "Entries created",
         `${payload?.created_count || 0} guided journal entries were added to the ledger.`,
@@ -173,7 +197,7 @@ export default function GuidedEntryWizard({ onSubmitted }) {
   if (loading) {
     return (
       <section className="panel stack">
-        <span className="eyebrow">Guided Inputs</span>
+        <span className="eyebrow">{title}</span>
         <p className="lead">Loading the company setup for guided entries...</p>
       </section>
     );
@@ -182,7 +206,7 @@ export default function GuidedEntryWizard({ onSubmitted }) {
   if (!company) {
     return (
       <section className="panel stack">
-        <span className="eyebrow">Guided Inputs</span>
+        <span className="eyebrow">{title}</span>
         <p className="lead">No company found for the current workspace.</p>
       </section>
     );
@@ -192,15 +216,12 @@ export default function GuidedEntryWizard({ onSubmitted }) {
     <section className="panel stack">
       <div className="panel-header">
         <div>
-          <span className="eyebrow">Guided Inputs</span>
-          <h3>{heading} wizard</h3>
+          <span className="eyebrow">{title}</span>
+          <h3>{heading} {subtitle}</h3>
         </div>
       </div>
 
-      <p className="lead">
-        Enter business facts and the system will convert them into journal entries behind the
-        scenes, then feed the ledger and statements.
-      </p>
+      <p className="lead">{intro}</p>
 
       {error ? <div className="form-error">{error}</div> : null}
 
@@ -330,7 +351,7 @@ export default function GuidedEntryWizard({ onSubmitted }) {
           Reset Wizard
         </button>
         <button type="button" className="primary-button" onClick={submit} disabled={submitting}>
-          {submitting ? "Creating entries..." : "Create Guided Entries"}
+          {submitting ? "Creating entries..." : submitLabel}
         </button>
       </div>
     </section>

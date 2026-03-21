@@ -13,6 +13,7 @@ export default function Register() {
     password: "",
     business_type: "sole_proprietor",
   });
+  const [partnerNames, setPartnerNames] = useState(["", ""]);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -25,7 +26,14 @@ export default function Register() {
     setSubmitting(true);
     setError("");
     try {
-      await register(form);
+      const payload = {
+        ...form,
+        partner_names:
+          form.business_type === "partnership"
+            ? partnerNames.map((name) => name.trim()).filter(Boolean)
+            : [],
+      };
+      await register(payload);
       toast.success("Workspace created", "Your account is ready and your session is active.");
       navigate("/app", { replace: true });
     } catch (err) {
@@ -88,6 +96,68 @@ export default function Register() {
               <option value="company">Company</option>
             </select>
           </label>
+
+          {form.business_type === "partnership" ? (
+            <div className="stack">
+              <label className="field">
+                <span>Partner 1</span>
+                <input
+                  required
+                  value={partnerNames[0] || ""}
+                  onChange={(event) =>
+                    setPartnerNames((current) => [event.target.value, current[1] || "", ...current.slice(2)])
+                  }
+                />
+              </label>
+              <label className="field">
+                <span>Partner 2</span>
+                <input
+                  required
+                  value={partnerNames[1] || ""}
+                  onChange={(event) =>
+                    setPartnerNames((current) => [current[0] || "", event.target.value, ...current.slice(2)])
+                  }
+                />
+              </label>
+
+              {partnerNames.slice(2).map((name, index) => (
+                <div key={`extra-partner-${index}`} className="partner-name-row">
+                  <label className="field">
+                    <span>Partner {index + 3}</span>
+                    <input
+                      value={name}
+                      onChange={(event) =>
+                        setPartnerNames((current) =>
+                          current.map((item, partnerIndex) =>
+                            partnerIndex === index + 2 ? event.target.value : item,
+                          ),
+                        )
+                      }
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={() =>
+                      setPartnerNames((current) => current.filter((_, partnerIndex) => partnerIndex !== index + 2))
+                    }
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+
+              <div className="button-row">
+                <button
+                  type="button"
+                  className="ghost-button"
+                  onClick={() => setPartnerNames((current) => [...current, ""])}
+                >
+                  Add Partner
+                </button>
+              </div>
+            </div>
+          ) : null}
 
           <label className="field">
             <span>Email</span>

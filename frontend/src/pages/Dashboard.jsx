@@ -17,6 +17,7 @@ export default function Dashboard() {
   const { finance, ai } = useApi();
   const toast = useToast();
   const [data, setData] = useState(null);
+  const [statements, setStatements] = useState(null);
   const [aiData, setAiData] = useState(null);
   const [invoices, setInvoices] = useState([]);
   const [bills, setBills] = useState([]);
@@ -37,14 +38,16 @@ export default function Dashboard() {
     setLoading(true);
     setError("");
     try {
-      const [financeData, aiOverview, invoiceData, billData] = await Promise.all([
+      const [financeData, statementsData, aiOverview, invoiceData, billData] = await Promise.all([
         finance.getDashboard(),
+        finance.getFinancialStatements(),
         ai.getAICFO(),
         finance.getInvoices(),
         finance.getBills(),
       ]);
 
       setData(financeData);
+      setStatements(statementsData);
       setAiData(aiOverview);
       setInvoices(Array.isArray(invoiceData?.items) ? invoiceData.items : []);
       setBills(Array.isArray(billData?.items) ? billData.items : []);
@@ -113,6 +116,15 @@ export default function Dashboard() {
       });
     }
 
+    if ((statements?.financial_position?.balanced ?? true) === false) {
+      items.push({
+        title: "Books need alignment",
+        detail: `The statement of financial position is off by ${formatKes(
+          statements?.financial_position?.difference || 0,
+        )}. Review setup entries before relying on the statements.`,
+      });
+    }
+
     if ((data?.bill_count || 0) > (data?.invoice_count || 0)) {
       items.push({
         title: "Cost volume is outpacing sales volume",
@@ -126,7 +138,7 @@ export default function Dashboard() {
     }
 
     return items;
-  }, [data]);
+  }, [data, statements]);
 
   const submitInvoice = async ({ party, description, amount, taxRate }) => {
     setSubmitting("invoice");
@@ -193,12 +205,16 @@ export default function Dashboard() {
     return <Loader label="Loading dashboard..." />;
   }
 
+  const profitOrLoss = statements?.profit_or_loss || {};
+  const financialPosition = statements?.financial_position || {};
+  const cashFlow = statements?.cash_flow || {};
+
   return (
     <section className="page-shell">
       <header className="hero-banner">
         <div>
           <span className="eyebrow">Live Finance Workspace</span>
-          <h2>See what matters, act quickly, and let the backend carry the logic.</h2>
+          <h2>Move from structured business input to statements and forecast in one place.</h2>
           <p className="lead">{aiData?.summary || "Your backend summary will appear here."}</p>
         </div>
         <div className="hero-actions">
@@ -220,6 +236,170 @@ export default function Dashboard() {
         {metrics.map((metric) => (
           <Card key={metric.title} title={metric.title} value={metric.value} hint={metric.hint} />
         ))}
+      </div>
+
+      <div className="dashboard-grid">
+        <section className="panel stack">
+          <div className="panel-header">
+            <div>
+              <span className="eyebrow">Statement Of Profit Or Loss</span>
+              <h3>Operating result</h3>
+            </div>
+          </div>
+
+          <div className="summary-line">
+            <strong>Revenue</strong>
+            <span>{formatKes(profitOrLoss?.revenue?.total || 0)}</span>
+          </div>
+          <div className="summary-line">
+            <strong>Cost of sales</strong>
+            <span>{formatKes(profitOrLoss?.cost_of_sales?.total || 0)}</span>
+          </div>
+          <div className="summary-line">
+            <strong>Gross profit</strong>
+            <span>{formatKes(profitOrLoss?.gross_profit || 0)}</span>
+          </div>
+          <div className="summary-line">
+            <strong>Operating expenses</strong>
+            <span>{formatKes(profitOrLoss?.operating_expenses?.total || 0)}</span>
+          </div>
+          <div className="summary-line">
+            <strong>Other expenses</strong>
+            <span>{formatKes(profitOrLoss?.other_expenses?.total || 0)}</span>
+          </div>
+          <div className="summary-line">
+            <strong>Tax expense</strong>
+            <span>{formatKes(profitOrLoss?.tax_expense?.total || 0)}</span>
+          </div>
+          {(profitOrLoss?.appropriations?.total || 0) > 0 ? (
+            <div className="summary-line">
+              <strong>Appropriations</strong>
+              <span>{formatKes(profitOrLoss?.appropriations?.total || 0)}</span>
+            </div>
+          ) : null}
+          <div className="summary-line statement-total">
+            <strong>Profit for the period</strong>
+            <span>{formatKes(profitOrLoss?.current_period_result || 0)}</span>
+          </div>
+        </section>
+
+        <section className="panel stack">
+          <div className="panel-header">
+            <div>
+              <span className="eyebrow">Statement Of Financial Position</span>
+              <h3>Assets, liabilities, and equity</h3>
+            </div>
+            <span
+              className={`status-pill ${
+                financialPosition?.balanced ? "status-pill--ready" : "status-pill--warning"
+              }`}
+            >
+              {financialPosition?.balanced ? "Balanced" : "Check balances"}
+            </span>
+          </div>
+
+          <div className="summary-line">
+            <strong>Current assets</strong>
+            <span>{formatKes(financialPosition?.current_assets?.total || 0)}</span>
+          </div>
+          <div className="summary-line">
+            <strong>Non-current assets</strong>
+            <span>{formatKes(financialPosition?.non_current_assets?.total || 0)}</span>
+          </div>
+          <div className="summary-line statement-total">
+            <strong>Total assets</strong>
+            <span>{formatKes(financialPosition?.total_assets || 0)}</span>
+          </div>
+          <div className="summary-line">
+            <strong>Current liabilities</strong>
+            <span>{formatKes(financialPosition?.current_liabilities?.total || 0)}</span>
+          </div>
+          <div className="summary-line">
+            <strong>Non-current liabilities</strong>
+            <span>{formatKes(financialPosition?.non_current_liabilities?.total || 0)}</span>
+          </div>
+          <div className="summary-line">
+            <strong>Total liabilities</strong>
+            <span>{formatKes(financialPosition?.total_liabilities || 0)}</span>
+          </div>
+          <div className="summary-line">
+            <strong>Current year earnings</strong>
+            <span>{formatKes(financialPosition?.equity?.current_year_earnings || 0)}</span>
+          </div>
+          <div className="summary-line statement-total">
+            <strong>Total equity</strong>
+            <span>{formatKes(financialPosition?.equity?.total || 0)}</span>
+          </div>
+        </section>
+      </div>
+
+      <div className="dashboard-grid">
+        <section className="panel stack">
+          <div className="panel-header">
+            <div>
+              <span className="eyebrow">Statement Of Cash Flows</span>
+              <h3>Cash movement</h3>
+            </div>
+          </div>
+
+          <div className="summary-line">
+            <strong>Opening cash</strong>
+            <span>{formatKes(cashFlow?.opening_cash || 0)}</span>
+          </div>
+          <div className="summary-line">
+            <strong>Operating cash flow</strong>
+            <span>{formatKes(cashFlow?.operating?.total || 0)}</span>
+          </div>
+          <div className="summary-line">
+            <strong>Investing cash flow</strong>
+            <span>{formatKes(cashFlow?.investing?.total || 0)}</span>
+          </div>
+          <div className="summary-line">
+            <strong>Financing cash flow</strong>
+            <span>{formatKes(cashFlow?.financing?.total || 0)}</span>
+          </div>
+          <div className="summary-line">
+            <strong>Net change in cash</strong>
+            <span>{formatKes(cashFlow?.net_change_in_cash || 0)}</span>
+          </div>
+          <div className="summary-line statement-total">
+            <strong>Ending cash</strong>
+            <span>{formatKes(cashFlow?.ending_cash || 0)}</span>
+          </div>
+        </section>
+
+        <section className="panel stack">
+          <div className="panel-header">
+            <div>
+              <span className="eyebrow">Forecast</span>
+              <h3>Next 90 days</h3>
+            </div>
+          </div>
+
+          {(aiData?.forecast || []).length ? (
+            <div className="forecast-stack">
+              {aiData.forecast.map((item) => (
+                <div key={item.label} className="forecast-row">
+                  <div>
+                    <strong>{item.label}</strong>
+                    <p className="subtle-text">Projected cash position</p>
+                  </div>
+                  <strong>{formatKes(item.projected_cash)}</strong>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="lead">Forecast data will appear as soon as the finance snapshot is available.</p>
+          )}
+
+          <div className="insight-card insight-card--answer">
+            <strong>Forecast narrative</strong>
+            <p>
+              {aiData?.narrative ||
+                "Once the system has enough structure, it will explain the cash direction and what to do next."}
+            </p>
+          </div>
+        </section>
       </div>
 
       <div className="dashboard-grid">

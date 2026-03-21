@@ -25,6 +25,7 @@ from services.reporting_service import (
 from services.finance_service import calculate_finance_summary, calculate_tax_summary, get_or_create_tax_profile
 from services.ai_cfo_service import build_ai_cfo_overview, answer_ai_cfo_question
 from services.guided_entry_service import post_guided_entries
+from services.statement_service import build_financial_statements
 from services.ingestion_service import read_external_dataframe, normalize_ledger_dataframe, calc
 from services.common import refresh_finance_documents, generate_document_number
 from middleware import get_user_from_token, roles_required, plan_required, get_plan_definition
@@ -628,11 +629,13 @@ def me():
         return {"msg": "account deleted"}
 
     org = db.session.get(Organization, user.org_id)
+    default_company = db.session.get(Company, user.default_company_id) if user.default_company_id else None
     return {
         **_serialize_user_record(user),
         "org_id": user.org_id,
         "plan_code": org.plan_code if org else "free",
         "subscription": _serialize_subscription(org),
+        "default_company": _serialize_company(default_company) if default_company else None,
         "api_contract": _build_api_contract(),
     }
 
@@ -922,6 +925,19 @@ def finance_summary():
     if not company:
         return {"error": "company not found"}, 404
     return calculate_finance_summary(company)
+
+
+@app.route("/finance/statements")
+@jwt_required()
+def finance_statements():
+    user, error = _require_user()
+    if error:
+        return error
+
+    company = Company.query.get(user.default_company_id)
+    if not company:
+        return {"error": "company not found"}, 404
+    return build_financial_statements(company)
 
 @app.route("/finance/invoices", methods=["GET"])
 @jwt_required()
