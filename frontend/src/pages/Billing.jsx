@@ -9,6 +9,8 @@ const formatKes = (value) =>
     maximumFractionDigits: 0,
   }).format(Number(value || 0));
 
+const normalisePhone = (value) => value.replace(/[^\d]/g, "");
+
 export default function Billing() {
   const { billing } = useApi();
   const [plans, setPlans] = useState([]);
@@ -41,11 +43,18 @@ export default function Billing() {
   }, []);
 
   const handlePay = async (plan) => {
+    const cleanedPhone = normalisePhone(phone);
+    if (!/^2547\d{8}$/.test(cleanedPhone)) {
+      setError("Enter a valid M-Pesa number in the format 2547XXXXXXXX.");
+      return;
+    }
+
     setSubmitting(plan.code);
     setError("");
     try {
-      const payload = await billing.startMpesaPayment(phone, plan.local_price_kes, plan.code);
+      const payload = await billing.startMpesaPayment(cleanedPhone, plan.local_price_kes, plan.code);
       setCheckout(payload);
+      setPhone(cleanedPhone);
       await load();
     } catch (err) {
       setError(err.message || "Payment failed.");
@@ -76,7 +85,7 @@ export default function Billing() {
       <header className="page-header">
         <div>
           <span className="eyebrow">Billing</span>
-          <h2>Upgrade plans without putting payment logic in the UI</h2>
+          <h2>Upgrade plans with a clean M-Pesa flow and backend-owned billing rules</h2>
         </div>
       </header>
 
@@ -103,9 +112,17 @@ export default function Billing() {
           <input
             placeholder="2547XXXXXXXX"
             value={phone}
-            onChange={(event) => setPhone(event.target.value)}
+            onChange={(event) => setPhone(normalisePhone(event.target.value))}
           />
         </label>
+
+        <div className="insight-card">
+          <strong>What happens next</strong>
+          <p>
+            Choose a plan, confirm the phone number, and the backend starts the M-Pesa checkout.
+            Then refresh the request status here until the upgrade lands.
+          </p>
+        </div>
       </section>
 
       <div className="plan-grid">
@@ -146,9 +163,16 @@ export default function Billing() {
             </div>
           </div>
 
-          <p className="lead">
-            {checkout.external_reference || checkout.checkout_request_id || "Preview checkout created."}
-          </p>
+          <div className="signal-grid">
+            <div className="insight-card">
+              <strong>Reference</strong>
+              <p>{checkout.external_reference || checkout.checkout_request_id || "Preview checkout created."}</p>
+            </div>
+            <div className="insight-card">
+              <strong>Mode</strong>
+              <p>{checkout.is_preview ? "Preview mode" : "Live checkout"}</p>
+            </div>
+          </div>
 
           <button type="button" className="ghost-button" onClick={refreshCheckout}>
             Refresh Checkout

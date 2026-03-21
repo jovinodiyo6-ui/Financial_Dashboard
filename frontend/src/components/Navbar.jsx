@@ -7,12 +7,12 @@ export default function Navbar() {
   return (
     <header className="topbar">
       <div className="topbar__brand">
-        <span className="eyebrow">Product Mode</span>
+        <span className="eyebrow">Control Tower</span>
         <strong>Finance Control Tower</strong>
       </div>
 
       <nav className="topbar__nav">
-        <NavLink to="/" end className={({ isActive }) => `topbar__link${isActive ? " topbar__link--active" : ""}`}>
+        <NavLink to="/app" end className={({ isActive }) => `topbar__link${isActive ? " topbar__link--active" : ""}`}>
           Dashboard
         </NavLink>
         <NavLink to="/billing" className={({ isActive }) => `topbar__link${isActive ? " topbar__link--active" : ""}`}>
@@ -21,6 +21,7 @@ export default function Navbar() {
       </nav>
 
       <div className="topbar__actions">
+        <span className="status-pill">{user?.plan_code || "free"}</span>
         <span className="topbar__meta">{user?.email}</span>
         <button type="button" className="ghost-button" onClick={logout}>
           Logout

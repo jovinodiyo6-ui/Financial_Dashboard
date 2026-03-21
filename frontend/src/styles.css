@@ -75,6 +75,13 @@ a {
   gap: 1rem;
 }
 
+.hero-actions,
+.signal-grid {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
 .landing-shell {
   min-height: 100vh;
   display: grid;
@@ -126,7 +133,8 @@ a {
 .pricing-strip,
 .metric-grid,
 .content-grid,
-.plan-grid {
+.plan-grid,
+.signal-grid {
   display: grid;
   gap: 1rem;
 }
@@ -170,6 +178,25 @@ a {
   line-height: 1.6;
 }
 
+.insight-card {
+  display: grid;
+  gap: 0.45rem;
+  padding: 1rem;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.84);
+  border: 1px solid var(--line);
+}
+
+.insight-card p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.insight-card--answer {
+  background: linear-gradient(180deg, rgba(15, 118, 110, 0.08) 0%, rgba(255, 255, 255, 0.92) 100%);
+}
+
 .pricing-card--active {
   outline: 2px solid rgba(15, 118, 110, 0.2);
   background: linear-gradient(180deg, #ffffff 0%, #effcf9 100%);
@@ -198,6 +225,11 @@ a {
   border-radius: 30px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.9) 0%, rgba(245, 249, 249, 0.98) 100%);
+}
+
+.auth-cta {
+  display: grid;
+  gap: 0.9rem;
 }
 
 .auth-header h2,
@@ -664,6 +696,10 @@ a {
   padding: 1rem;
 }
 
+.auth-shell {
+  min-height: 100vh;
+}
+
 .auth-link-row a {
   color: var(--brand);
   font-weight: 700;
@@ -739,6 +775,7 @@ a {
 
   .page-header,
   .hero-banner,
+  .hero-actions,
   .summary-line,
   .forecast-row,
   .topbar,

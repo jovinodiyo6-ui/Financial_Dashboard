@@ -5,6 +5,7 @@ import { useAuth } from "./hooks/useAuth";
 import { AuthProvider } from "./store/authStore";
 import Billing from "./pages/Billing";
 import Dashboard from "./pages/Dashboard";
+import Landing from "./pages/Landing";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 
@@ -37,7 +38,7 @@ function PublicOnly({ children }) {
   }
 
   if (isAuthenticated) {
-    return <Navigate to="/" replace />;
+    return <Navigate to="/app" replace />;
   }
 
   return children;
@@ -46,6 +47,10 @@ function PublicOnly({ children }) {
 function AppRoutes() {
   return (
     <Routes>
+      <Route
+        path="/"
+        element={<Landing />}
+      />
       <Route
         path="/login"
         element={
@@ -64,7 +69,7 @@ function AppRoutes() {
       />
 
       <Route element={<ProtectedLayout />}>
-        <Route path="/" element={<Dashboard />} />
+        <Route path="/app" element={<Dashboard />} />
         <Route path="/billing" element={<Billing />} />
       </Route>
 

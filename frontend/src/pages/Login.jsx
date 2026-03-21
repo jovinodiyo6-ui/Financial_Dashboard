@@ -10,7 +10,7 @@ export default function Login() {
   const [submitting, setSubmitting] = useState(false);
 
   if (!loading && isAuthenticated) {
-    return <Navigate to="/" replace />;
+    return <Navigate to="/app" replace />;
   }
 
   const submit = async (event) => {
@@ -19,7 +19,7 @@ export default function Login() {
     setError("");
     try {
       await login(form);
-      navigate("/", { replace: true });
+      navigate("/app", { replace: true });
     } catch (err) {
       setError(err.message || "Login failed.");
     } finally {
@@ -28,7 +28,27 @@ export default function Login() {
   };
 
   return (
-    <section className="auth-page">
+    <section className="landing-shell auth-shell">
+      <div className="landing-story">
+        <span className="eyebrow">Sign In</span>
+        <h1>Walk back into the finance picture fast.</h1>
+        <p className="lead">
+          Your dashboard, billing controls, and AI CFO workspace are ready as soon as your
+          session reconnects.
+        </p>
+
+        <div className="story-grid">
+          <article className="story-card">
+            <strong>Daily clarity</strong>
+            <span>See profit, receivables, expenses, and tax signals in one place.</span>
+          </article>
+          <article className="story-card">
+            <strong>Fewer clicks</strong>
+            <span>Create invoices, bills, and payment upgrades directly from the workspace.</span>
+          </article>
+        </div>
+      </div>
+
       <div className="auth-card">
         <div className="auth-header">
           <span className="eyebrow">Sign In</span>

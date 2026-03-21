@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import Card from "../components/Card";
 import Loader from "../components/Loader";
 import TransactionForm from "../components/TransactionForm";
@@ -17,8 +18,11 @@ export default function Dashboard() {
   const [aiData, setAiData] = useState(null);
   const [invoices, setInvoices] = useState([]);
   const [bills, setBills] = useState([]);
+  const [question, setQuestion] = useState("");
+  const [answer, setAnswer] = useState("");
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState("");
+  const [asking, setAsking] = useState(false);
   const [error, setError] = useState("");
 
   const load = async () => {
@@ -73,6 +77,48 @@ export default function Dashboard() {
     [data],
   );
 
+  const signals = useMemo(() => {
+    const items = [];
+
+    if ((data?.net_profit || 0) > 0) {
+      items.push({
+        title: "Profit is positive",
+        detail: "Your current operating activity is generating a surplus, which gives you room to reinvest.",
+      });
+    } else {
+      items.push({
+        title: "Profit needs attention",
+        detail: "Expenses are eating into revenue. Tighten spend and review pricing or collection speed.",
+      });
+    }
+
+    if ((data?.overdue_invoice_count || 0) > 0) {
+      items.push({
+        title: "Cash is trapped in receivables",
+        detail: `${data?.overdue_invoice_count || 0} invoices are overdue. Push collections before adding new costs.`,
+      });
+    } else {
+      items.push({
+        title: "Collections look disciplined",
+        detail: "There are no overdue invoices in the current snapshot, which keeps cash flow cleaner.",
+      });
+    }
+
+    if ((data?.bill_count || 0) > (data?.invoice_count || 0)) {
+      items.push({
+        title: "Cost volume is outpacing sales volume",
+        detail: "Your payable activity is heavier than your receivable activity right now. Keep an eye on margin pressure.",
+      });
+    } else {
+      items.push({
+        title: "Sales momentum is visible",
+        detail: "Invoice activity is keeping pace with or ahead of bills in the current cycle.",
+      });
+    }
+
+    return items;
+  }, [data]);
+
   const submitInvoice = async ({ party, description, amount, taxRate }) => {
     setSubmitting("invoice");
     try {
@@ -103,6 +149,25 @@ export default function Dashboard() {
     }
   };
 
+  const submitQuestion = async (event) => {
+    event.preventDefault();
+    if (!question.trim()) {
+      setError("Ask a finance question first.");
+      return;
+    }
+
+    setAsking(true);
+    setError("");
+    try {
+      const payload = await ai.askAICFO(question.trim());
+      setAnswer(payload?.answer || payload?.summary || "AI CFO responded, but no answer text was returned.");
+    } catch (err) {
+      setError(err.message || "AI CFO could not answer right now.");
+    } finally {
+      setAsking(false);
+    }
+  };
+
   if (loading) {
     return <Loader label="Loading dashboard..." />;
   }
@@ -111,13 +176,18 @@ export default function Dashboard() {
     <section className="page-shell">
       <header className="hero-banner">
         <div>
-          <span className="eyebrow">Backend-Driven Dashboard</span>
-          <h2>One frontend. One source of truth. No finance math in React.</h2>
+          <span className="eyebrow">Live Finance Workspace</span>
+          <h2>See what matters, act quickly, and let the backend carry the logic.</h2>
           <p className="lead">{aiData?.summary || "Your backend summary will appear here."}</p>
         </div>
-        <button type="button" className="ghost-button ghost-button--light" onClick={load}>
-          Refresh
-        </button>
+        <div className="hero-actions">
+          <Link className="ghost-button ghost-button--light" to="/billing">
+            Upgrade Plan
+          </Link>
+          <button type="button" className="ghost-button ghost-button--light" onClick={load}>
+            Refresh
+          </button>
+        </div>
       </header>
 
       {error ? <div className="form-error">{error}</div> : null}
@@ -133,23 +203,71 @@ export default function Dashboard() {
           <div className="panel-header">
             <div>
               <span className="eyebrow">AI CFO</span>
-              <h3>Insights</h3>
+              <h3>Decision support</h3>
             </div>
           </div>
 
           <p className="lead">{aiData?.summary || "No AI summary available yet."}</p>
 
-          <div className="stack">
-            {(aiData?.top_actions || []).map((action) => (
-              <div key={action} className="alert-card alert-card--positive">
-                <strong>Recommended action</strong>
-                <span>{action}</span>
+          <div className="signal-grid">
+            {signals.map((signal) => (
+              <div key={signal.title} className="insight-card">
+                <strong>{signal.title}</strong>
+                <p>{signal.detail}</p>
               </div>
             ))}
           </div>
+
+          {(aiData?.top_actions || []).length ? (
+            <div className="stack">
+              {(aiData?.top_actions || []).map((action) => (
+                <div key={action} className="alert-card alert-card--positive">
+                  <strong>Recommended action</strong>
+                  <span>{action}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
         </section>
 
-        <div className="transaction-grid">
+        <section className="panel stack">
+          <div className="panel-header">
+            <div>
+              <span className="eyebrow">Ask AI CFO</span>
+              <h3>Get a plain-English answer</h3>
+            </div>
+          </div>
+
+          <form className="stack" onSubmit={submitQuestion}>
+            <label className="field">
+              <span>Question</span>
+              <textarea
+                placeholder="Example: What should I fix first to improve cash flow this month?"
+                value={question}
+                onChange={(event) => setQuestion(event.target.value)}
+              />
+            </label>
+
+            <button type="submit" className="primary-button" disabled={asking}>
+              {asking ? "Thinking..." : "Ask AI CFO"}
+            </button>
+          </form>
+
+          <div className="insight-card insight-card--answer">
+            <strong>Latest response</strong>
+            <p>{answer || "Ask a question to turn your finance data into the next move."}</p>
+          </div>
+        </section>
+      </div>
+
+      <div className="transaction-grid">
+        <div className="panel stack">
+          <div className="panel-header">
+            <div>
+              <span className="eyebrow">Capture Revenue</span>
+              <h3>Create invoice</h3>
+            </div>
+          </div>
           <TransactionForm
             title="Create Invoice"
             partyLabel="Customer"
@@ -158,7 +276,15 @@ export default function Dashboard() {
             onSubmit={submitInvoice}
             loading={submitting === "invoice"}
           />
+        </div>
 
+        <div className="panel stack">
+          <div className="panel-header">
+            <div>
+              <span className="eyebrow">Capture Cost</span>
+              <h3>Create bill</h3>
+            </div>
+          </div>
           <TransactionForm
             title="Create Bill"
             partyLabel="Vendor"
