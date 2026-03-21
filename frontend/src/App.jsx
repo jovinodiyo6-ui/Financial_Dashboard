@@ -7,6 +7,7 @@ import { useAuth } from "./hooks/useAuth";
 import { AuthProvider } from "./store/authStore";
 import Billing from "./pages/Billing";
 import Dashboard from "./pages/Dashboard";
+import Entries from "./pages/Entries";
 import Landing from "./pages/Landing";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
@@ -72,6 +73,7 @@ function AppRoutes() {
 
       <Route element={<ProtectedLayout />}>
         <Route path="/app" element={<Dashboard />} />
+        <Route path="/entries" element={<Entries />} />
         <Route path="/billing" element={<Billing />} />
       </Route>
 

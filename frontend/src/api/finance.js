@@ -65,6 +65,8 @@ export const createJournalEntry = (first, second) => {
   });
 };
 
+export const getJournalEntries = (client = api) => client("/finance/journal-entries");
+
 export const getTaxSummary = (client = api) => client("/finance/tax/summary");
 
 export const getTaxProfile = (client = api) => client("/finance/tax/profile");

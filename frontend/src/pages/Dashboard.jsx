@@ -202,6 +202,9 @@ export default function Dashboard() {
           <p className="lead">{aiData?.summary || "Your backend summary will appear here."}</p>
         </div>
         <div className="hero-actions">
+          <Link className="ghost-button ghost-button--light" to="/entries">
+            Make Entry
+          </Link>
           <Link className="ghost-button ghost-button--light" to="/billing">
             Upgrade Plan
           </Link>
