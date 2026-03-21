@@ -22,16 +22,24 @@ export default function TransactionForm({
       setError(`${partyLabel} is required.`);
       return;
     }
+    if (!description.trim()) {
+      setError("Description is required.");
+      return;
+    }
     if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
       setError("Amount must be greater than zero.");
+      return;
+    }
+    if (!Number.isFinite(numericTaxRate) || numericTaxRate < 0 || numericTaxRate > 100) {
+      setError("Tax rate must be between 0 and 100.");
       return;
     }
     setError("");
     await onSubmit({
       party: party.trim(),
-      description: description.trim() || itemLabel,
+      description: description.trim(),
       amount: numericAmount,
-      taxRate: Number.isFinite(numericTaxRate) ? numericTaxRate : 0,
+      taxRate: numericTaxRate,
     });
     setParty("");
     setDescription(itemLabel);
@@ -50,12 +58,22 @@ export default function TransactionForm({
 
       <label className="field">
         <span>{partyLabel}</span>
-        <input value={party} onChange={(event) => setParty(event.target.value)} />
+        <input
+          required
+          placeholder={`Enter ${partyLabel.toLowerCase()}`}
+          value={party}
+          onChange={(event) => setParty(event.target.value)}
+        />
       </label>
 
       <label className="field">
         <span>Description</span>
-        <input value={description} onChange={(event) => setDescription(event.target.value)} />
+        <input
+          required
+          placeholder={itemLabel}
+          value={description}
+          onChange={(event) => setDescription(event.target.value)}
+        />
       </label>
 
       <div className="form-grid">
@@ -65,6 +83,8 @@ export default function TransactionForm({
             type="number"
             min="0"
             step="0.01"
+            inputMode="decimal"
+            required
             value={amount}
             onChange={(event) => setAmount(event.target.value)}
           />
@@ -76,6 +96,8 @@ export default function TransactionForm({
             type="number"
             min="0"
             step="0.01"
+            max="100"
+            inputMode="decimal"
             value={taxRate}
             onChange={(event) => setTaxRate(event.target.value)}
           />

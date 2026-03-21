@@ -4,6 +4,7 @@ import Card from "../components/Card";
 import Loader from "../components/Loader";
 import TransactionForm from "../components/TransactionForm";
 import { useApi } from "../hooks/useApi";
+import { useToast } from "../hooks/useToast";
 
 const formatKes = (value) =>
   new Intl.NumberFormat("en-KE", {
@@ -14,6 +15,7 @@ const formatKes = (value) =>
 
 export default function Dashboard() {
   const { finance, ai } = useApi();
+  const toast = useToast();
   const [data, setData] = useState(null);
   const [aiData, setAiData] = useState(null);
   const [invoices, setInvoices] = useState([]);
@@ -24,6 +26,12 @@ export default function Dashboard() {
   const [submitting, setSubmitting] = useState("");
   const [asking, setAsking] = useState(false);
   const [error, setError] = useState("");
+
+  const suggestedQuestions = [
+    "What should I fix first to improve cash flow this month?",
+    "Where is margin pressure showing up in the latest numbers?",
+    "What action would improve profit fastest right now?",
+  ];
 
   const load = async () => {
     setLoading(true);
@@ -42,6 +50,7 @@ export default function Dashboard() {
       setBills(Array.isArray(billData?.items) ? billData.items : []);
     } catch (err) {
       setError(err.message || "Failed to load dashboard.");
+      toast.error("Dashboard unavailable", err.message || "We could not load the workspace.");
     } finally {
       setLoading(false);
     }
@@ -129,6 +138,11 @@ export default function Dashboard() {
         items: [{ description, quantity: 1, unit_price: amount }],
       });
       await load();
+      toast.success("Invoice saved", `Invoice for ${party} was added successfully.`);
+    } catch (err) {
+      setError(err.message || "We could not save the invoice.");
+      toast.error("Invoice failed", err.message || "We could not save the invoice.");
+      throw err;
     } finally {
       setSubmitting("");
     }
@@ -144,6 +158,11 @@ export default function Dashboard() {
         items: [{ description, quantity: 1, unit_price: amount }],
       });
       await load();
+      toast.success("Bill saved", `Bill for ${party} was added successfully.`);
+    } catch (err) {
+      setError(err.message || "We could not save the bill.");
+      toast.error("Bill failed", err.message || "We could not save the bill.");
+      throw err;
     } finally {
       setSubmitting("");
     }
@@ -161,8 +180,10 @@ export default function Dashboard() {
     try {
       const payload = await ai.askAICFO(question.trim());
       setAnswer(payload?.answer || payload?.summary || "AI CFO responded, but no answer text was returned.");
+      toast.success("AI CFO answered", "The latest response is now pinned in your workspace.");
     } catch (err) {
       setError(err.message || "AI CFO could not answer right now.");
+      toast.error("AI CFO unavailable", err.message || "The assistant could not answer right now.");
     } finally {
       setAsking(false);
     }
@@ -252,6 +273,19 @@ export default function Dashboard() {
               {asking ? "Thinking..." : "Ask AI CFO"}
             </button>
           </form>
+
+          <div className="chip-row">
+            {suggestedQuestions.map((prompt) => (
+              <button
+                key={prompt}
+                type="button"
+                className="chip-button"
+                onClick={() => setQuestion(prompt)}
+              >
+                {prompt}
+              </button>
+            ))}
+          </div>
 
           <div className="insight-card insight-card--answer">
             <strong>Latest response</strong>

@@ -1,6 +1,6 @@
 import { createContext, createElement, useContext, useEffect, useMemo, useState } from "react";
 import { getMe, login as loginRequest, register as registerRequest } from "../api/auth";
-import { readToken, storeToken } from "../api/client";
+import { AUTH_EXPIRED_EVENT, readToken, storeToken } from "../api/client";
 
 const AuthContext = createContext(null);
 
@@ -41,6 +41,18 @@ export function AuthProvider({ children }) {
     hydrateUser().catch(() => {
       // Ignore startup auth errors and fall back to logged-out state.
     });
+  }, []);
+
+  useEffect(() => {
+    const handleUnauthorized = () => {
+      storeToken(null);
+      setToken(null);
+      setUser(null);
+      setLoading(false);
+    };
+
+    window.addEventListener(AUTH_EXPIRED_EVENT, handleUnauthorized);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, handleUnauthorized);
   }, []);
 
   const login = async (credentials) => {

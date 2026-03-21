@@ -1,6 +1,8 @@
 import { BrowserRouter, Navigate, Outlet, Route, Routes } from "react-router-dom";
+import ErrorBoundary from "./components/ErrorBoundary";
 import Navbar from "./components/Navbar";
 import Loader from "./components/Loader";
+import { ToastProvider } from "./context/ToastContext";
 import { useAuth } from "./hooks/useAuth";
 import { AuthProvider } from "./store/authStore";
 import Billing from "./pages/Billing";
@@ -80,10 +82,14 @@ function AppRoutes() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter>
-        <AppRoutes />
-      </BrowserRouter>
-    </AuthProvider>
+    <BrowserRouter>
+      <ErrorBoundary>
+        <ToastProvider>
+          <AuthProvider>
+            <AppRoutes />
+          </AuthProvider>
+        </ToastProvider>
+      </ErrorBoundary>
+    </BrowserRouter>
   );
 }

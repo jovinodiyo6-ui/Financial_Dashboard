@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import Loader from "../components/Loader";
 import { useApi } from "../hooks/useApi";
+import { useToast } from "../hooks/useToast";
 
 const formatKes = (value) =>
   new Intl.NumberFormat("en-KE", {
@@ -13,6 +14,7 @@ const normalisePhone = (value) => value.replace(/[^\d]/g, "");
 
 export default function Billing() {
   const { billing } = useApi();
+  const toast = useToast();
   const [plans, setPlans] = useState([]);
   const [summary, setSummary] = useState(null);
   const [phone, setPhone] = useState("");
@@ -33,6 +35,7 @@ export default function Billing() {
       setSummary(summaryPayload);
     } catch (err) {
       setError(err.message || "Failed to load billing.");
+      toast.error("Billing unavailable", err.message || "We could not load billing right now.");
     } finally {
       setLoading(false);
     }
@@ -46,6 +49,7 @@ export default function Billing() {
     const cleanedPhone = normalisePhone(phone);
     if (!/^2547\d{8}$/.test(cleanedPhone)) {
       setError("Enter a valid M-Pesa number in the format 2547XXXXXXXX.");
+      toast.error("Invalid M-Pesa number", "Use the format 2547XXXXXXXX.");
       return;
     }
 
@@ -56,8 +60,10 @@ export default function Billing() {
       setCheckout(payload);
       setPhone(cleanedPhone);
       await load();
+      toast.success("Checkout started", `M-Pesa checkout for ${plan.label} is ready on your phone.`);
     } catch (err) {
       setError(err.message || "Payment failed.");
+      toast.error("Checkout failed", err.message || "We could not start the M-Pesa checkout.");
     } finally {
       setSubmitting("");
     }
@@ -71,8 +77,10 @@ export default function Billing() {
       const payload = await billing.getMpesaRequestStatus(checkout.id);
       setCheckout(payload);
       await load();
+      toast.info("Checkout refreshed", "The latest payment status is now on screen.");
     } catch (err) {
       setError(err.message || "Failed to refresh checkout.");
+      toast.error("Refresh failed", err.message || "We could not refresh the payment status.");
     }
   };
 

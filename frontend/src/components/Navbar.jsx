@@ -1,5 +1,6 @@
 import { NavLink } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
+import SystemStatusPill from "./SystemStatusPill";
 
 export default function Navbar() {
   const { logout, user } = useAuth();
@@ -21,6 +22,7 @@ export default function Navbar() {
       </nav>
 
       <div className="topbar__actions">
+        <SystemStatusPill />
         <span className="status-pill">{user?.plan_code || "free"}</span>
         <span className="topbar__meta">{user?.email}</span>
         <button type="button" className="ghost-button" onClick={logout}>

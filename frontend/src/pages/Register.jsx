@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
+import { useToast } from "../hooks/useToast";
 
 export default function Register() {
   const navigate = useNavigate();
+  const toast = useToast();
   const { register, isAuthenticated, loading } = useAuth();
   const [form, setForm] = useState({
     org: "",
@@ -24,9 +26,11 @@ export default function Register() {
     setError("");
     try {
       await register(form);
+      toast.success("Workspace created", "Your account is ready and your session is active.");
       navigate("/app", { replace: true });
     } catch (err) {
       setError(err.message || "Registration failed.");
+      toast.error("Registration failed", err.message || "We could not create the account.");
     } finally {
       setSubmitting(false);
     }
@@ -64,6 +68,7 @@ export default function Register() {
           <label className="field">
             <span>Organization</span>
             <input
+              required
               value={form.org}
               onChange={(event) => setForm((current) => ({ ...current, org: event.target.value }))}
             />
@@ -87,6 +92,8 @@ export default function Register() {
             <span>Email</span>
             <input
               type="email"
+              required
+              autoComplete="email"
               value={form.email}
               onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))}
             />
@@ -96,6 +103,9 @@ export default function Register() {
             <span>Password</span>
             <input
               type="password"
+              required
+              minLength="8"
+              autoComplete="new-password"
               value={form.password}
               onChange={(event) =>
                 setForm((current) => ({ ...current, password: event.target.value }))

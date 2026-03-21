@@ -14,6 +14,7 @@ const resolveApiBase = () => {
 };
 
 export const API_BASE = resolveApiBase();
+export const AUTH_EXPIRED_EVENT = "financepro:unauthorized";
 
 export const readToken = () => {
   try {
@@ -153,5 +154,8 @@ export function createApiClient({ getToken, onUnauthorized } = {}) {
 
 export const api = createApiClient({
   getToken: readToken,
-  onUnauthorized: () => storeToken(null),
+  onUnauthorized: () => {
+    storeToken(null);
+    window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
+  },
 });

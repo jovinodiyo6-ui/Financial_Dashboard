@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { Navigate, Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../hooks/useAuth";
+import { useToast } from "../hooks/useToast";
 
 export default function Login() {
   const navigate = useNavigate();
+  const toast = useToast();
   const { login, isAuthenticated, loading } = useAuth();
   const [form, setForm] = useState({ email: "", password: "" });
   const [error, setError] = useState("");
@@ -19,9 +21,11 @@ export default function Login() {
     setError("");
     try {
       await login(form);
+      toast.success("Welcome back", "Your finance workspace is ready.");
       navigate("/app", { replace: true });
     } catch (err) {
       setError(err.message || "Login failed.");
+      toast.error("Sign in failed", err.message || "We could not sign you in.");
     } finally {
       setSubmitting(false);
     }
@@ -60,6 +64,8 @@ export default function Login() {
             <span>Email</span>
             <input
               type="email"
+              required
+              autoComplete="email"
               value={form.email}
               onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))}
             />
@@ -69,6 +75,8 @@ export default function Login() {
             <span>Password</span>
             <input
               type="password"
+              required
+              autoComplete="current-password"
               value={form.password}
               onChange={(event) => setForm((current) => ({ ...current, password: event.target.value }))}
             />
