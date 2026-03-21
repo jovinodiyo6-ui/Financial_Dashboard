@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from accounting_system.database import connect
+from shared.accounting_core import build_trial_balance_report, infer_normal_balance
 
 
 def total_sales() -> float:
@@ -55,18 +56,27 @@ def balance_sheet() -> dict:
 def trial_balance() -> list[dict]:
     conn = connect()
     cursor = conn.cursor()
-    cursor.execute(
-        """
-        SELECT a.name AS account,
-               COALESCE(SUM(jl.debit), 0) AS total_debit,
-               COALESCE(SUM(jl.credit), 0) AS total_credit
-        FROM accounts a
-        LEFT JOIN journal_lines jl ON jl.account_id = a.id
-        GROUP BY a.id, a.name
-        ORDER BY a.name
-        """
-    )
-    rows = [dict(row) for row in cursor.fetchall()]
+    cursor.execute("SELECT id, name, type FROM accounts ORDER BY name")
+    accounts = [
+        {
+            "id": row["id"],
+            "name": row["name"],
+            "account": row["name"],
+            "type": row["type"],
+            "category": row["type"],
+            "normal_balance": infer_normal_balance(row["type"]),
+        }
+        for row in cursor.fetchall()
+    ]
+    cursor.execute("SELECT account_id, debit, credit FROM journal_lines")
+    lines = [dict(row) for row in cursor.fetchall()]
     conn.close()
-    return rows
-
+    report = build_trial_balance_report(accounts, lines)
+    return [
+        {
+            "account": item["name"],
+            "total_debit": item["debit_total"],
+            "total_credit": item["credit_total"],
+        }
+        for item in report["items"]
+    ]

@@ -5,6 +5,7 @@ from models import (
     Report, PurchaseOrderLine
 )
 from services.accounting_engine import seed_chart_of_accounts, serialize_ledger_account, serialize_journal_entry
+from shared.accounting_core import build_trial_balance_report
 from utils import today_utc_date, iso_date
 import datetime
 import json
@@ -18,64 +19,19 @@ def build_trial_balance(company):
         .filter(JournalEntry.company_id == company.id, JournalEntry.status.in_(["posted", "reversed"]))
         .all()
     )
-    balance_map = {account.id: {"debit": 0.0, "credit": 0.0} for account in accounts}
-    for line, _entry in lines:
-        bucket = balance_map.setdefault(line.account_id, {"debit": 0.0, "credit": 0.0})
-        bucket["debit"] += float(line.debit or 0)
-        bucket["credit"] += float(line.credit or 0)
-
-    items = []
-    debit_total = 0.0
-    credit_total = 0.0
-    for account in accounts:
-        totals = balance_map.get(account.id, {"debit": 0.0, "credit": 0.0})
-        debit_total += totals["debit"]
-        credit_total += totals["credit"]
-        items.append(
-            {
-                **serialize_ledger_account(account),
-                "debit_total": round(totals["debit"], 2),
-                "credit_total": round(totals["credit"], 2),
-                "net_balance": round(totals["debit"] - totals["credit"], 2),
-            }
-        )
-
-    difference = round(debit_total - credit_total, 2)
-    suspect_accounts = sorted(
-        (
-            {
-                "id": item["id"],
-                "code": item["code"],
-                "name": item["name"],
-                "debit_total": item["debit_total"],
-                "credit_total": item["credit_total"],
-                "net_balance": item["net_balance"],
-            }
-            for item in items
-            if abs(float(item["net_balance"] or 0)) > 0
-        ),
-        key=lambda item: abs(float(item["net_balance"] or 0)),
-        reverse=True,
-    )[:5]
-
-    return {
-        "items": items,
-        "debit_total": round(debit_total, 2),
-        "credit_total": round(credit_total, 2),
-        "difference": difference,
-        "balanced": difference == 0,
-        "imbalance": {
-            "difference": difference,
-            "direction": (
-                "balanced"
-                if difference == 0
-                else "debits_exceed_credits"
-                if difference > 0
-                else "credits_exceed_debits"
-            ),
-            "suspect_accounts": suspect_accounts,
-        },
-    }
+    serialized_accounts = [serialize_ledger_account(account) for account in accounts]
+    account_lookup = {account["id"]: account for account in serialized_accounts}
+    journal_lines = [
+        {
+            "account_id": line.account_id,
+            "account_code": account_lookup.get(line.account_id, {}).get("code", ""),
+            "account_name": account_lookup.get(line.account_id, {}).get("name", ""),
+            "debit": float(line.debit or 0),
+            "credit": float(line.credit or 0),
+        }
+        for line, _entry in lines
+    ]
+    return build_trial_balance_report(serialized_accounts, journal_lines)
 
 def normalized_trial_balance_amount(item):
     amount = float(item.get("net_balance", 0) or 0)

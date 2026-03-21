@@ -9,6 +9,7 @@ RUN python -m pip install --upgrade pip setuptools wheel && \
 
 # Copy app
 COPY backend/ .
+COPY shared/ ./shared/
 
 # Create instance folder
 RUN mkdir -p instance

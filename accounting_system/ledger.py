@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Iterable
 
 from accounting_system.database import connect
+from shared.accounting_core import analyze_entry_lines
 
 
 LedgerLine = tuple[int, float, float]
@@ -11,10 +12,19 @@ LedgerLine = tuple[int, float, float]
 
 def validate_entry(lines: Iterable[LedgerLine]) -> None:
     lines = list(lines)
-    debit_total = sum(line[1] for line in lines)
-    credit_total = sum(line[2] for line in lines)
-    if round(debit_total, 2) != round(credit_total, 2):
-        raise ValueError("Debits and credits must balance.")
+    diagnostics = analyze_entry_lines(
+        [
+            {
+                "line_number": index,
+                "account_id": account_id,
+                "debit": debit,
+                "credit": credit,
+            }
+            for index, (account_id, debit, credit) in enumerate(lines, start=1)
+        ]
+    )
+    if not diagnostics["can_post"]:
+        raise ValueError(diagnostics["error"])
 
 
 def post_entry(description: str, lines: Iterable[LedgerLine], date: str | None = None) -> int:
@@ -53,4 +63,3 @@ def account_id_by_name(name: str) -> int:
     if row is None:
         raise ValueError(f"Account '{name}' does not exist.")
     return int(row["id"])
-

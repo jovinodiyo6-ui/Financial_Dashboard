@@ -33,11 +33,16 @@ instance/
 *.sqlite
 transactions.db
 saas.db
+.pytest_cache/
+.coverage
+htmlcov/
 
 # Node
 node_modules/
 dist/
 build/
+.vercel/
+frontend/.vercel/
 
 # Track the frontend lockfile so deployments stay reproducible.
 !frontend/package-lock.json
