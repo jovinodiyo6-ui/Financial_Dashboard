@@ -4,54 +4,74 @@ from services.reporting_service import (
     build_workforce_overview,
     build_inventory_summary,
     build_project_summary,
-    aggregate_org_reports,
-    normalized_trial_balance_amount,
 )
+from services.statement_service import build_financial_statements
+
+
+def _round(value):
+    return round(float(value or 0), 2)
+
+
+def _pct(value):
+    if value is None:
+        return "n/a"
+    return f"{round(float(value) * 100, 1)}%"
+
+
+def _status_from_alerts(alerts):
+    if any(alert["severity"] == "high" for alert in alerts):
+        return "critical"
+    if any(alert["severity"] in {"medium", "warning"} for alert in alerts):
+        return "warning"
+    return "healthy"
+
 
 def build_company_ai_snapshot(company):
     finance = calculate_finance_summary(company)
+    statements = build_financial_statements(company)
     tax = calculate_tax_summary(company)
     accounting = build_accounting_overview(company)
     workforce = build_workforce_overview(company)
     inventory = build_inventory_summary(company)
     projects = build_project_summary(company)
-    reports = aggregate_org_reports(company.org_id, company.id)
 
-    trial_items = accounting["trial_balance"]["items"]
-    current_assets = round(
-        sum(
-            max(0.0, normalized_trial_balance_amount(item))
-            for item in trial_items
-            if item["category"] == "asset" and item["subtype"] == "current"
-        ),
-        2,
-    )
-    current_liabilities = round(
-        sum(
-            max(0.0, normalized_trial_balance_amount(item))
-            for item in trial_items
-            if item["category"] == "liability" and item["subtype"] == "current"
-        ),
-        2,
-    )
-    cash_balance = round(
-        sum(max(0.0, normalized_trial_balance_amount(item)) for item in trial_items if item["code"] == "1000"),
-        2,
-    )
-    annual_revenue = round(float(reports.get("revenue", 0) or 0), 2)
-    annual_expenses = round(float(reports.get("expenses", 0) or 0), 2)
-    monthly_inflow = round(max(float(finance["collected_this_month"]), annual_revenue / 12 if annual_revenue else 0), 2)
-    baseline_outflow = float(finance["paid_this_month"]) + float(workforce["payroll_this_month"])
-    fallback_outflow = annual_expenses / 12 if annual_expenses else (float(finance["open_payables"]) / 3 if finance["open_payables"] else 0)
-    monthly_outflow = round(max(baseline_outflow, fallback_outflow, 1.0), 2)
+    health = statements["health"]
+    profit_or_loss = statements["profit_or_loss"]
+    financial_position = statements["financial_position"]
+    cash_flow = statements["cash_flow"]
+
+    revenue = _round(max(float(finance["revenue"]), float(profit_or_loss["revenue"]["total"])))
+    expenses = _round(max(float(finance["expenses"]), revenue - float(profit_or_loss["current_period_result"] or 0)))
+    cash_balance = _round(cash_flow["ending_cash"])
+    current_assets = _round(financial_position["current_assets"]["total"])
+    current_liabilities = _round(financial_position["current_liabilities"]["total"])
     current_ratio = round(current_assets / current_liabilities, 2) if current_liabilities > 0 else None
-    cash_runway_months = round(cash_balance / monthly_outflow, 1) if monthly_outflow > 0 else None
+    working_capital = _round(current_assets - current_liabilities)
 
-    tax_drag = round(max(float(tax["net_tax_due"]), 0.0) / 3, 2) if float(tax["net_tax_due"]) > 0 else 0.0
+    monthly_revenue = _round(
+        max(
+            revenue,
+            float(finance["collected_this_month"] or 0),
+            float(finance["open_receivables"] or 0) * 0.35 if finance["open_receivables"] else 0,
+            0,
+        )
+    )
+    monthly_expenses = _round(
+        max(
+            expenses,
+            float(finance["paid_this_month"] or 0),
+            float(finance["current_liabilities"] or 0) / 3 if finance["current_liabilities"] else 0,
+            1.0,
+        )
+    )
+    monthly_net_cash_generation = _round(monthly_revenue - monthly_expenses)
+    cash_runway_months = round(cash_balance / monthly_expenses, 1) if monthly_expenses > 0 else None
+    tax_drag = _round(max(float(tax["net_tax_due"] or 0), 0.0) / 3) if float(tax["net_tax_due"] or 0) > 0 else 0.0
+
     projected_cash = cash_balance
     forecast = []
     for month_number in range(1, 4):
-        projected_cash = round(projected_cash + monthly_inflow - monthly_outflow - tax_drag, 2)
+        projected_cash = _round(projected_cash + monthly_net_cash_generation - tax_drag)
         forecast.append(
             {
                 "month": month_number,
@@ -63,15 +83,20 @@ def build_company_ai_snapshot(company):
     return {
         "company_id": company.id,
         "company_name": company.name,
+        "business_type": company.business_type,
         "metrics": {
             "cash_balance": cash_balance,
             "current_assets": current_assets,
             "current_liabilities": current_liabilities,
             "current_ratio": current_ratio,
-            "annual_revenue": annual_revenue,
-            "annual_expenses": annual_expenses,
-            "monthly_inflow": monthly_inflow,
-            "monthly_outflow": monthly_outflow,
+            "working_capital": working_capital,
+            "revenue": revenue,
+            "expenses": expenses,
+            "gross_margin_pct": health.get("gross_margin_pct"),
+            "net_margin_pct": health.get("net_margin_pct"),
+            "monthly_revenue": monthly_revenue,
+            "monthly_expenses": monthly_expenses,
+            "monthly_net_cash_generation": monthly_net_cash_generation,
             "cash_runway_months": cash_runway_months,
         },
         "finance": finance,
@@ -87,6 +112,12 @@ def build_company_ai_snapshot(company):
             "total_cost": projects["total_cost"],
             "total_margin": projects["total_margin"],
         },
+        "accounting": {
+            "trial_balance_balanced": accounting["trial_balance"]["balanced"],
+            "trial_balance_difference": accounting["trial_balance"]["difference"],
+        },
+        "statements": statements,
+        "data_quality_flags": list(finance.get("data_quality_flags") or []),
         "forecast": forecast,
     }
 
@@ -97,7 +128,18 @@ def build_ai_cfo_alerts(snapshot):
     inventory = snapshot["inventory"]
     workforce = snapshot["workforce"]
     metrics = snapshot["metrics"]
+    data_quality_flags = snapshot["data_quality_flags"]
     alerts = []
+
+    for flag in data_quality_flags:
+        alerts.append(
+            {
+                "severity": "medium",
+                "title": "Data quality warning",
+                "message": flag,
+                "recommendation": "Add missing costs, purchases, or liabilities so the reports reflect real operations.",
+            }
+        )
 
     if metrics["current_ratio"] is not None and metrics["current_ratio"] < 1:
         alerts.append(
@@ -108,22 +150,40 @@ def build_ai_cfo_alerts(snapshot):
                 "recommendation": "Accelerate collections, delay discretionary spend, and review payable timing this week.",
             }
         )
+    if metrics["net_margin_pct"] is not None and metrics["net_margin_pct"] > 0.8:
+        alerts.append(
+            {
+                "severity": "medium",
+                "title": "Margin looks artificially high",
+                "message": f"Net margin is {_pct(metrics['net_margin_pct'])}, which usually means costs are incomplete or understated.",
+                "recommendation": "Record cost of sales, operating expenses, and outstanding liabilities before relying on this profit figure.",
+            }
+        )
+    if metrics["net_margin_pct"] is not None and metrics["net_margin_pct"] < 0:
+        alerts.append(
+            {
+                "severity": "high",
+                "title": "Business is loss-making",
+                "message": f"Net margin is {_pct(metrics['net_margin_pct'])}, so the current operating model is destroying value.",
+                "recommendation": "Cut non-essential costs, review pricing, and push collections before cash pressure compounds.",
+            }
+        )
     if float(finance["overdue_receivables"]) > 0:
         alerts.append(
             {
                 "severity": "medium",
                 "title": "Collections pressure",
-                "message": f"There are {finance['overdue_invoice_count']} overdue invoices totaling {round(float(finance['overdue_receivables']), 2)}.",
+                "message": f"There are {finance['overdue_invoice_count']} overdue invoices totaling {_round(finance['overdue_receivables'])}.",
                 "recommendation": "Trigger a collections sequence and escalate the oldest invoices to the owner or finance lead.",
             }
         )
-    if float(finance["overdue_payables"]) > 0:
+    if float(finance["open_payables"]) > 0:
         alerts.append(
             {
                 "severity": "medium",
-                "title": "Supplier obligations overdue",
-                "message": f"Overdue payables total {round(float(finance['overdue_payables']), 2)} across {finance['overdue_bill_count']} bills.",
-                "recommendation": "Prioritize critical vendors and schedule payment rails before terms deteriorate.",
+                "title": "Supplier obligations are building",
+                "message": f"Outstanding supplier obligations are {_round(finance['open_payables'])}, with total current liabilities at {_round(finance['current_liabilities'])}.",
+                "recommendation": "Schedule supplier settlements and tax reserves before cash becomes constrained.",
             }
         )
     if int(finance["bank_unmatched_count"]) > 0:
@@ -149,7 +209,7 @@ def build_ai_cfo_alerts(snapshot):
             {
                 "severity": "medium",
                 "title": "Tax liability due",
-                "message": f"Estimated net tax due is {round(float(tax['net_tax_due']), 2)} in {tax['jurisdiction_code']}.",
+                "message": f"Estimated net tax due is {_round(tax['net_tax_due'])} in {tax['jurisdiction_code']}.",
                 "recommendation": "Reserve cash now and prepare the filing pack before the next statutory deadline.",
             }
         )
@@ -159,7 +219,7 @@ def build_ai_cfo_alerts(snapshot):
                 "severity": "high",
                 "title": "Projected cash shortfall",
                 "message": f"Cash is forecast to fall to {snapshot['forecast'][-1]['projected_cash']} within 90 days.",
-                "recommendation": "Cut non-essential outflow, pull collections forward, or line up short-term financing immediately.",
+                "recommendation": "Increase collections or reduce monthly outflow immediately to avoid a cash crunch.",
             }
         )
     if float(workforce["contractor_1099_exposure"]) >= 600:
@@ -167,7 +227,7 @@ def build_ai_cfo_alerts(snapshot):
             {
                 "severity": "low",
                 "title": "1099 review",
-                "message": f"Contractor exposure this period is {round(float(workforce['contractor_1099_exposure']), 2)}.",
+                "message": f"Contractor exposure this period is {_round(workforce['contractor_1099_exposure'])}.",
                 "recommendation": "Confirm contractor tax details now so year-end compliance does not become a scramble.",
             }
         )
@@ -175,24 +235,61 @@ def build_ai_cfo_alerts(snapshot):
     return alerts
 
 
+def _build_ai_narrative(company, snapshot, alerts):
+    metrics = snapshot["metrics"]
+    finance = snapshot["finance"]
+
+    if metrics["current_ratio"] is not None and metrics["current_ratio"] >= 1.5:
+        opening = (
+            f"{company.name} has strong short-term liquidity with {_round(metrics['cash_balance'])} in cash "
+            f"and a current ratio of {metrics['current_ratio']}."
+        )
+    elif metrics["current_ratio"] is not None and metrics["current_ratio"] < 1:
+        opening = (
+            f"{company.name} is under liquidity pressure with only {_round(metrics['cash_balance'])} in cash "
+            f"against current liabilities of {_round(metrics['current_liabilities'])}."
+        )
+    else:
+        opening = f"{company.name} is carrying {_round(metrics['cash_balance'])} in cash."
+
+    performance = (
+        f"Revenue is {_round(metrics['revenue'])} against expenses of {_round(metrics['expenses'])}, "
+        f"which implies a net margin of {_pct(metrics['net_margin_pct'])}."
+    )
+
+    if snapshot["data_quality_flags"]:
+        caveat = f"However, {snapshot['data_quality_flags'][0]}"
+    elif float(finance["open_payables"] or 0) > 0:
+        caveat = (
+            f"Outstanding payables of {_round(finance['open_payables'])} should be planned into near-term cash decisions."
+        )
+    else:
+        caveat = "The books look structurally cleaner, so the statements are more decision-ready."
+
+    next_move = alerts[0]["recommendation"] if alerts else "Keep recording costs and liabilities so forecasts stay grounded."
+    forecast_line = (
+        f"Based on the current run rate, 90-day projected cash is "
+        f"{snapshot['forecast'][-1]['projected_cash'] if snapshot['forecast'] else _round(metrics['cash_balance'])}."
+    )
+    return " ".join([opening, performance, caveat, forecast_line, next_move])
+
+
 def build_ai_cfo_overview(company):
     snapshot = build_company_ai_snapshot(company)
     alerts = build_ai_cfo_alerts(snapshot)
     top_actions = [alert["recommendation"] for alert in alerts[:4]]
-    metrics = snapshot["metrics"]
-    narrative = (
-        f"{company.name} is carrying {metrics['cash_balance']} in cash with "
-        f"{snapshot['finance']['open_receivables']} outstanding receivables and "
-        f"{snapshot['finance']['open_payables']} open payables. "
-        f"Projected 90-day cash is {snapshot['forecast'][-1]['projected_cash'] if snapshot['forecast'] else metrics['cash_balance']}."
-    )
+    health_status = _status_from_alerts(alerts)
+    narrative = _build_ai_narrative(company, snapshot, alerts)
+
     return {
         **snapshot,
         "alerts": alerts,
+        "health_status": health_status,
         "top_actions": top_actions,
         "narrative": narrative,
         "summary": narrative,
     }
+
 
 def answer_ai_cfo_question(question, overview):
     lowered = str(question or "").strip().lower()
@@ -201,15 +298,20 @@ def answer_ai_cfo_question(question, overview):
     tax = overview["tax"]
     inventory = overview["inventory"]
     workforce = overview["workforce"]
+    flags = overview.get("data_quality_flags") or []
 
     if "profit" in lowered or "margin" in lowered:
-        return (
-            f"Recorded annual revenue is {metrics['annual_revenue']} against expenses of {metrics['annual_expenses']}. "
-            f"Project margin currently stands at {overview['projects']['total_margin']}."
+        answer = (
+            f"Recorded revenue is {metrics['revenue']} against expenses of {metrics['expenses']}, "
+            f"so net margin is {_pct(metrics['net_margin_pct'])}."
         )
+        if flags:
+            answer += f" The biggest caution is: {flags[0]}"
+        return answer
     if "cash" in lowered or "runway" in lowered or "liquidity" in lowered:
         return (
-            f"Cash balance is {metrics['cash_balance']} with a monthly outflow run rate of {metrics['monthly_outflow']}. "
+            f"Cash balance is {metrics['cash_balance']} with monthly revenue of {metrics['monthly_revenue']} "
+            f"and monthly expenses of {metrics['monthly_expenses']}. "
             f"Estimated cash runway is {metrics['cash_runway_months']} months."
         )
     if "tax" in lowered or "vat" in lowered or "filing" in lowered:
@@ -227,6 +329,8 @@ def answer_ai_cfo_question(question, overview):
             f"Payroll cash this month is {workforce['payroll_this_month']} and contractor 1099 exposure is "
             f"{workforce['contractor_1099_exposure']}."
         )
+    if flags:
+        return f"{overview['narrative']} Data quality watch: {flags[0]}"
     if overview["top_actions"]:
         return f"{overview['narrative']} Top action: {overview['top_actions'][0]}"
     return overview["narrative"]

@@ -76,6 +76,14 @@ export default function Dashboard() {
         hint: `${data?.bill_count || 0} bills`,
       },
       {
+        title: "Gross Margin",
+        value:
+          data?.gross_margin_pct === null || data?.gross_margin_pct === undefined
+            ? "n/a"
+            : `${(Number(data.gross_margin_pct) * 100).toFixed(1)}%`,
+        hint: `COGS ${formatKes(data?.cost_of_sales || 0)}`,
+      },
+      {
         title: "Profit",
         value: formatKes(data?.net_profit || 0),
         hint: `Tax due ${formatKes(data?.net_tax_due || 0)}`,
@@ -84,6 +92,14 @@ export default function Dashboard() {
         title: "Receivables",
         value: formatKes(data?.open_receivables || 0),
         hint: `${data?.overdue_invoice_count || 0} overdue`,
+      },
+      {
+        title: "Liabilities",
+        value: formatKes(data?.current_liabilities || 0),
+        hint:
+          data?.current_ratio === null || data?.current_ratio === undefined
+            ? "Current ratio n/a"
+            : `Current ratio ${Number(data.current_ratio).toFixed(2)}x`,
       },
     ],
     [data],
@@ -122,6 +138,13 @@ export default function Dashboard() {
         detail: `The statement of financial position is off by ${formatKes(
           statements?.financial_position?.difference || 0,
         )}. Review setup entries before relying on the statements.`,
+      });
+    }
+
+    if ((data?.data_quality_flags || []).length) {
+      items.push({
+        title: "Data quality needs work",
+        detail: data.data_quality_flags[0],
       });
     }
 
@@ -218,6 +241,17 @@ export default function Dashboard() {
           <p className="lead">{aiData?.summary || "Your backend summary will appear here."}</p>
         </div>
         <div className="hero-actions">
+          <span
+            className={`status-pill ${
+              aiData?.health_status === "critical"
+                ? "status-pill--overdue"
+                : aiData?.health_status === "warning"
+                ? "status-pill--warning"
+                : "status-pill--ready"
+            }`}
+          >
+            {aiData?.health_status || "healthy"}
+          </span>
           <Link className="ghost-button ghost-button--light" to="/reports">
             View Reports
           </Link>
@@ -415,6 +449,26 @@ export default function Dashboard() {
           </div>
 
           <p className="lead">{aiData?.summary || "No AI summary available yet."}</p>
+
+          {(aiData?.alerts || []).length ? (
+            <div className="stack">
+              {aiData.alerts.slice(0, 3).map((alert) => (
+                <div
+                  key={`${alert.title}-${alert.message}`}
+                  className={`alert-card ${
+                    alert.severity === "high"
+                      ? "alert-card--critical"
+                      : alert.severity === "medium"
+                      ? "alert-card--warning"
+                      : "alert-card--positive"
+                  }`}
+                >
+                  <strong>{alert.title}</strong>
+                  <span>{alert.message}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
 
           <div className="signal-grid">
             {signals.map((signal) => (

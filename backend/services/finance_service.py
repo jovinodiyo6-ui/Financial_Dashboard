@@ -2,7 +2,19 @@ import os
 from extensions import db
 from models import TaxProfile, CustomerPayment, VendorPayment, BankFeedTransaction
 from services.common import refresh_finance_documents
+from services.statement_service import build_financial_statements
 from utils import today_utc_date, parse_money
+
+
+def _statement_section_total(section):
+    return round(float((section or {}).get("total") or 0), 2)
+
+
+def _statement_item_amount(section, code):
+    for item in (section or {}).get("items", []):
+        if str(item.get("code") or "").strip() == str(code):
+            return round(float(item.get("amount") or 0), 2)
+    return 0.0
 
 def get_or_create_tax_profile(company):
     profile = TaxProfile.query.filter_by(company_id=company.id).first()
@@ -28,6 +40,10 @@ def get_or_create_tax_profile(company):
 def calculate_finance_summary(company):
     invoices, bills = refresh_finance_documents(company.id)
     today = today_utc_date()
+    statements = build_financial_statements(company)
+    profit_or_loss = statements["profit_or_loss"]
+    financial_position = statements["financial_position"]
+    health = statements["health"]
 
     invoice_payments = CustomerPayment.query.filter_by(company_id=company.id).all()
     bill_payments = VendorPayment.query.filter_by(company_id=company.id).all()
@@ -51,18 +67,58 @@ def calculate_finance_summary(company):
 
     sales_tax_due = sum(invoice.tax_amount for invoice in invoices if invoice.status not in {"draft", "cancelled"})
     purchase_tax_credit = sum(bill.tax_amount for bill in bills if bill.status not in {"draft", "cancelled"})
-    revenue = sum(float(invoice.subtotal or 0) for invoice in invoices if invoice.status not in {"draft", "cancelled"})
-    expenses = sum(float(bill.subtotal or 0) for bill in bills if bill.status not in {"draft", "cancelled"})
-    net_profit = revenue - expenses
+
+    statement_revenue = _statement_section_total(profit_or_loss["revenue"])
+    statement_cost_of_sales = _statement_section_total(profit_or_loss["cost_of_sales"])
+    statement_operating_expenses = _statement_section_total(profit_or_loss["operating_expenses"])
+    statement_other_expenses = _statement_section_total(profit_or_loss["other_expenses"])
+    statement_tax_expense = _statement_section_total(profit_or_loss["tax_expense"])
+    statement_appropriations = _statement_section_total(profit_or_loss["appropriations"])
+    statement_expenses = round(
+        statement_cost_of_sales
+        + statement_operating_expenses
+        + statement_other_expenses
+        + statement_tax_expense
+        + statement_appropriations,
+        2,
+    )
+    document_revenue = sum(float(invoice.subtotal or 0) for invoice in invoices if invoice.status not in {"draft", "cancelled"})
+    document_expenses = sum(float(bill.subtotal or 0) for bill in bills if bill.status not in {"draft", "cancelled"})
+
+    revenue = max(round(document_revenue, 2), statement_revenue)
+    expenses = max(round(document_expenses, 2), statement_expenses)
+    net_profit = round(float(profit_or_loss["current_period_result"] or 0), 2)
+
+    open_receivables = max(open_receivables, _statement_item_amount(financial_position["current_assets"], "1100"))
+    accounts_payable_balance = _statement_item_amount(financial_position["current_liabilities"], "2000")
+    open_payables = max(open_payables, accounts_payable_balance)
+
+    current_assets_total = round(float(financial_position["current_assets"]["total"] or 0), 2)
+    current_liabilities_total = round(float(financial_position["current_liabilities"]["total"] or 0), 2)
+    gross_profit = round(float(profit_or_loss["gross_profit"] or 0), 2)
+
+    data_quality_flags = []
+    if revenue > 0 and expenses == 0:
+        data_quality_flags.append("No expenses or cost of sales are recorded against current revenue.")
+    if revenue > 0 and statement_cost_of_sales == 0 and company.business_type in {"manufacturing", "company", "partnership"}:
+        data_quality_flags.append("Sales exist without cost of sales, so margins may be overstated.")
+    if revenue > 0 and float(health.get("net_margin_pct") or 0) > 0.8:
+        data_quality_flags.append("Net margin is above 80%, which usually signals incomplete operating costs.")
+    if revenue > 0 and current_liabilities_total == 0 and company.business_type in {"manufacturing", "company"}:
+        data_quality_flags.append("No current liabilities are recorded, which may mean supplier or tax obligations are missing.")
 
     return {
         "revenue": round(revenue, 2),
         "expenses": round(expenses, 2),
+        "cost_of_sales": statement_cost_of_sales,
+        "gross_profit": gross_profit,
         "net_profit": round(net_profit, 2),
         "open_receivables": round(open_receivables, 2),
         "overdue_receivables": round(overdue_receivables, 2),
         "open_payables": round(open_payables, 2),
         "overdue_payables": round(overdue_payables, 2),
+        "current_assets": current_assets_total,
+        "current_liabilities": current_liabilities_total,
         "collected_this_month": round(collected_this_month, 2),
         "paid_this_month": round(paid_this_month, 2),
         "invoice_count": len(invoices),
@@ -74,6 +130,11 @@ def calculate_finance_summary(company):
         "sales_tax_due": round(sales_tax_due, 2),
         "purchase_tax_credit": round(purchase_tax_credit, 2),
         "net_tax_due": round(sales_tax_due - purchase_tax_credit, 2),
+        "gross_margin_pct": health.get("gross_margin_pct"),
+        "net_margin_pct": health.get("net_margin_pct"),
+        "current_ratio": health.get("current_ratio"),
+        "working_capital": health.get("working_capital"),
+        "data_quality_flags": data_quality_flags,
     }
 
 def calculate_tax_summary(company, profile=None):

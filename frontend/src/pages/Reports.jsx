@@ -98,7 +98,10 @@ export default function Reports() {
       },
       {
         label: "Current ratio",
-        value: health.current_ratio ? `${Number(health.current_ratio).toFixed(2)}x` : "n/a",
+        value:
+          health.current_ratio === null || health.current_ratio === undefined
+            ? "n/a"
+            : `${Number(health.current_ratio).toFixed(2)}x`,
         hint: "Current assets divided by current liabilities",
       },
       {
@@ -141,6 +144,17 @@ export default function Reports() {
           </p>
         </div>
         <div className="hero-actions">
+          <span
+            className={`status-pill ${
+              aiData?.health_status === "critical"
+                ? "status-pill--overdue"
+                : aiData?.health_status === "warning"
+                ? "status-pill--warning"
+                : "status-pill--ready"
+            }`}
+          >
+            {aiData?.health_status || "healthy"}
+          </span>
           <Link className="ghost-button ghost-button--light" to="/app">
             Back To Dashboard
           </Link>
@@ -161,6 +175,35 @@ export default function Reports() {
           </article>
         ))}
       </div>
+
+      {(aiData?.alerts || []).length ? (
+        <section className="panel stack">
+          <div className="panel-header">
+            <div>
+              <span className="eyebrow">Health Flags</span>
+              <h3>What needs attention now</h3>
+            </div>
+          </div>
+
+          <div className="signal-grid">
+            {aiData.alerts.slice(0, 4).map((alert) => (
+              <div
+                key={`${alert.title}-${alert.message}`}
+                className={`alert-card ${
+                  alert.severity === "high"
+                    ? "alert-card--critical"
+                    : alert.severity === "medium"
+                    ? "alert-card--warning"
+                    : "alert-card--positive"
+                }`}
+              >
+                <strong>{alert.title}</strong>
+                <span>{alert.message}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <div className="dashboard-grid">
         <section className="panel stack">
