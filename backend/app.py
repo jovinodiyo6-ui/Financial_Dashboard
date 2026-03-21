@@ -17,6 +17,7 @@ from services.common import refresh_finance_documents, generate_document_number
 from middleware import get_user_from_token, roles_required, plan_required
 from utils import parse_money, parse_iso_date, today_utc_date, iso_date
 from constants import *
+from bootstrap import ensure_startup_schema, build_system_status_payload
 import os
 import datetime
 import json
@@ -41,6 +42,7 @@ CORS(app)
 # Ensure database tables exist on startup (idempotent for SQLite/Postgres)
 with app.app_context():
     db.create_all()
+    ensure_startup_schema(db)
 
 # Return JSON for unhandled exceptions (avoids HTML 500 pages)
 @app.errorhandler(Exception)
@@ -60,6 +62,16 @@ def home():
 @app.route("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.route("/system-status")
+def system_status():
+    return build_system_status_payload()
+
+
+@app.route("/system/version")
+def system_version():
+    return build_system_status_payload()
 
 
 # ---------------------------------------------------------------------------

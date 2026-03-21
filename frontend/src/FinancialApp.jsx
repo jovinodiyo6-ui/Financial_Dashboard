@@ -982,6 +982,8 @@ export default function App() {
   const [maintenance, setMaintenance] = useState({
     maintenance: false,
     message: "[System Under Maintainance]",
+    environment: "production",
+    version: "unknown",
   });
   const [extracting, setExtracting] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
@@ -1935,6 +1937,8 @@ export default function App() {
     setMaintenance({
       maintenance: Boolean(payload.maintenance),
       message: payload.message || "[System Under Maintainance]",
+      environment: payload.environment || "production",
+      version: payload.version || "unknown",
     });
   };
 
@@ -3632,7 +3636,12 @@ export default function App() {
         await loadSystemStatus();
       } catch {
         if (active) {
-          setMaintenance({ maintenance: false, message: "[System Under Maintainance]" });
+          setMaintenance({
+            maintenance: false,
+            message: "[System Under Maintainance]",
+            environment: "production",
+            version: "unknown",
+          });
         }
       }
     };
@@ -4166,6 +4175,9 @@ export default function App() {
         {maintenance.maintenance ? <p style={themedStyles.warningText}>{maintenance.message}</p> : null}
         {errorMessage ? <p style={themedStyles.errorText}>{errorMessage}</p> : null}
         {infoMessage ? <p style={themedStyles.infoText}>{infoMessage}</p> : null}
+        <p style={themedStyles.graphNote}>
+          System: {maintenance.environment} · Build {maintenance.version}
+        </p>
         {resetPreviewLink ? (
           <div style={{ ...themedStyles.card, maxWidth: 540 }}>
             <p style={themedStyles.graphNote}>Development preview reset link</p>
@@ -4196,6 +4208,7 @@ export default function App() {
         <p style={themedStyles.sidebarMeta}>Role: {currentUser?.role || "member"}</p>
         <p style={themedStyles.sidebarMeta}>Plan: {currentUser?.subscription?.plan_label || "Starter"}</p>
         <p style={themedStyles.sidebarMeta}>Companies: {currentUser?.accessible_company_count || companies.length || 0}</p>
+        <p style={themedStyles.sidebarMeta}>System: {maintenance.environment} / {maintenance.version}</p>
         <p>Dashboard</p>
         <p>Reports</p>
         <p>Statements</p>
