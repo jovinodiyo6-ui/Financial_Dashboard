@@ -51,8 +51,14 @@ def calculate_finance_summary(company):
 
     sales_tax_due = sum(invoice.tax_amount for invoice in invoices if invoice.status not in {"draft", "cancelled"})
     purchase_tax_credit = sum(bill.tax_amount for bill in bills if bill.status not in {"draft", "cancelled"})
+    revenue = sum(float(invoice.subtotal or 0) for invoice in invoices if invoice.status not in {"draft", "cancelled"})
+    expenses = sum(float(bill.subtotal or 0) for bill in bills if bill.status not in {"draft", "cancelled"})
+    net_profit = revenue - expenses
 
     return {
+        "revenue": round(revenue, 2),
+        "expenses": round(expenses, 2),
+        "net_profit": round(net_profit, 2),
         "open_receivables": round(open_receivables, 2),
         "overdue_receivables": round(overdue_receivables, 2),
         "open_payables": round(open_payables, 2),

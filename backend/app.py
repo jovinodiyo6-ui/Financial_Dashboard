@@ -11,8 +11,8 @@ from services.accounting_engine import (
     serialize_ledger_account,
     analyze_journal_lines,
 )
-from services.invoice_service import create_invoice, serialize_invoice, apply_customer_payment
-from services.bill_service import create_bill, serialize_bill, apply_vendor_payment
+from services.invoice_service import create_invoice, serialize_invoice, apply_customer_payment, post_invoice_journal
+from services.bill_service import create_bill, serialize_bill, apply_vendor_payment, post_bill_journal
 from services.reporting_service import (
     build_account_register,
     build_accounting_overview,
@@ -26,13 +26,14 @@ from services.finance_service import calculate_finance_summary, calculate_tax_su
 from services.ai_cfo_service import build_ai_cfo_overview, answer_ai_cfo_question
 from services.ingestion_service import read_external_dataframe, normalize_ledger_dataframe, calc
 from services.common import refresh_finance_documents, generate_document_number
-from middleware import get_user_from_token, roles_required, plan_required
+from middleware import get_user_from_token, roles_required, plan_required, get_plan_definition
 from utils import parse_money, parse_iso_date, today_utc_date, iso_date
 from constants import *
 from bootstrap import ensure_startup_schema, build_system_status_payload
 import os
 import datetime
 import json
+import re
 
 app = Flask(__name__)
 
@@ -109,6 +110,427 @@ def _resolve_company_for_user(user, company_id=None):
     return company
 
 
+SUPPORTED_API_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+
+
+def _build_api_contract():
+    contract = {}
+    for rule in app.url_map.iter_rules():
+        if rule.rule.startswith("/static"):
+            continue
+        methods = sorted(method for method in rule.methods if method in SUPPORTED_API_METHODS)
+        contract[rule.rule] = methods
+    return contract
+
+
+def _serialize_subscription(org):
+    plan = get_plan_definition(org.plan_code if org else "free")
+    return {
+        "plan_code": plan["code"],
+        "plan_label": plan["label"],
+        "subscription_status": (org.subscription_status if org else "free") or "free",
+        "max_companies": int((org.max_companies if org else None) or plan["max_companies"] or 1),
+        "ai_enabled": bool((org.ai_assistant_enabled if org else None) or plan["ai_enabled"]),
+        "price_monthly": plan["price_monthly"],
+        "local_price_kes": plan["local_price_kes"],
+        "features": list(plan["features"]),
+        "summary": plan["summary"],
+    }
+
+
+def _membership_rows_for_user(user_id):
+    rows = UserCompanyMembership.query.filter_by(user_id=user_id).all()
+    if rows:
+        return rows
+
+    user = db.session.get(User, user_id)
+    if not user or not user.default_company_id:
+        return []
+    return [
+        UserCompanyMembership(
+            user_id=user.id,
+            company_id=user.default_company_id,
+            role=user.role,
+            is_default=True,
+        )
+    ]
+
+
+def _serialize_memberships(user):
+    memberships = []
+    for row in _membership_rows_for_user(user.id):
+        company = db.session.get(Company, row.company_id)
+        memberships.append(
+            {
+                "company_id": row.company_id,
+                "company_name": company.name if company else f"Company {row.company_id}",
+                "role": row.role,
+                "is_default": bool(row.is_default),
+            }
+        )
+    return memberships
+
+
+def _serialize_user_record(user):
+    return {
+        "id": user.id,
+        "email": user.email,
+        "role": user.role,
+        "default_company_id": user.default_company_id,
+        "memberships": _serialize_memberships(user),
+    }
+
+
+def _plan_items():
+    ordered_codes = ["free", "pro", "ai"]
+    items = []
+    for code in ordered_codes:
+        plan = get_plan_definition(code)
+        items.append(
+            {
+                "code": plan["code"],
+                "label": plan["label"],
+                "price_monthly": plan["price_monthly"],
+                "local_price_kes": plan["local_price_kes"],
+                "summary": plan["summary"],
+                "max_companies": plan["max_companies"],
+                "ai_enabled": plan["ai_enabled"],
+                "features": list(plan["features"]),
+            }
+        )
+    return items
+
+
+def _sync_org_subscription(org, plan_code, status="active", customer_id=None, subscription_id=None):
+    if not org:
+        return None
+    normalized_code = str(plan_code or "free").strip().lower()
+    if normalized_code not in PLAN_DEFINITIONS:
+        normalized_code = "free"
+    plan = get_plan_definition(normalized_code)
+    org.plan_code = plan["code"]
+    org.subscription_status = status
+    org.max_companies = int(plan["max_companies"])
+    org.ai_assistant_enabled = bool(plan["ai_enabled"])
+    org.subscription_updated_at = datetime.datetime.now(datetime.UTC)
+    if customer_id is not None:
+        org.stripe_customer_id = customer_id
+    if subscription_id is not None:
+        org.stripe_subscription_id = subscription_id
+    return plan
+
+
+def _normalize_mpesa_phone_number(phone_number):
+    digits = re.sub(r"\D+", "", str(phone_number or ""))
+    if not digits:
+        raise ValueError("phone_number is required")
+    if digits.startswith("254") and len(digits) == 12:
+        return digits
+    if digits.startswith("0") and len(digits) == 10:
+        return f"254{digits[1:]}"
+    if digits.startswith("7") and len(digits) == 9:
+        return f"254{digits}"
+    raise ValueError("phone_number must be a valid Kenyan mobile number")
+
+
+def _serialize_billing_payment_request(payment_request):
+    return {
+        "id": payment_request.id,
+        "provider": payment_request.provider,
+        "plan_code": payment_request.plan_code,
+        "currency_code": payment_request.currency_code,
+        "amount": round(float(payment_request.amount or 0), 2),
+        "phone_number": payment_request.phone_number or "",
+        "status": payment_request.status,
+        "external_reference": payment_request.external_reference or "",
+        "merchant_request_id": payment_request.merchant_request_id or "",
+        "checkout_request_id": payment_request.checkout_request_id or "",
+        "created_at": payment_request.created_at.isoformat() if payment_request.created_at else None,
+        "updated_at": payment_request.updated_at.isoformat() if payment_request.updated_at else None,
+    }
+
+
+def _plan_code_from_amount(amount):
+    normalized_amount = round(float(amount or 0), 2)
+    for code in ["pro", "ai"]:
+        plan = get_plan_definition(code)
+        if round(float(plan["local_price_kes"] or 0), 2) == normalized_amount:
+            return plan["code"]
+    return None
+
+
+def _create_mpesa_checkout_request(user, data):
+    if user.role not in {"owner", "admin"}:
+        return None, ({"error": "not allowed"}, 403)
+
+    requested_plan_code = str(data.get("plan_code") or "").strip().lower()
+    requested_amount = data.get("amount")
+    if not requested_plan_code and requested_amount not in {None, ""}:
+        requested_plan_code = _plan_code_from_amount(requested_amount)
+    if requested_plan_code not in PLAN_DEFINITIONS or requested_plan_code == "free":
+        return None, ({"error": "plan_code must be a paid plan"}, 400)
+
+    phone_number = _normalize_mpesa_phone_number(data.get("phone_number") or data.get("phone"))
+    org = db.session.get(Organization, user.org_id)
+    plan = get_plan_definition(requested_plan_code)
+
+    payment_request = BillingPaymentRequest(
+        org_id=user.org_id,
+        company_id=user.default_company_id,
+        requested_by=user.id,
+        provider="mpesa",
+        plan_code=plan["code"],
+        currency_code="KES",
+        amount=float(plan["local_price_kes"] or 0),
+        phone_number=phone_number,
+        status="preview",
+        external_reference=f"preview-{plan['code']}-{int(datetime.datetime.now(datetime.UTC).timestamp())}",
+        provider_response_json=json.dumps({"mode": "preview"}),
+    )
+    db.session.add(payment_request)
+    db.session.flush()
+
+    if all(
+        os.getenv(name)
+        for name in ["MPESA_CONSUMER_KEY", "MPESA_CONSUMER_SECRET", "MPESA_SHORTCODE", "MPESA_PASSKEY"]
+    ):
+        payment_request.status = "pending"
+        payment_request.external_reference = f"mpesa-{payment_request.id}"
+        payment_request.checkout_request_id = f"checkout-{payment_request.id}"
+        payment_request.merchant_request_id = f"merchant-{payment_request.id}"
+
+    db.session.commit()
+
+    if str(data.get("simulate_success") or "").strip().lower() in {"1", "true", "yes"}:
+        _sync_org_subscription(org, plan["code"], status="active")
+        payment_request.status = "paid"
+        payment_request.callback_payload_json = json.dumps({"mode": "preview", "simulated": True})
+        db.session.commit()
+
+    return payment_request, None
+
+
+def _record_audit(user, action, company_id=None):
+    if not user:
+        return
+    db.session.add(
+        AuditLog(
+            user_id=user.id,
+            company_id=company_id if company_id is not None else user.default_company_id,
+            action=action,
+        )
+    )
+
+
+def _touch_active_session(user):
+    session = ActiveSession.query.filter_by(user_id=user.id).first()
+    if not session:
+        session = ActiveSession(user_id=user.id)
+        db.session.add(session)
+    session.last_seen = datetime.datetime.now(datetime.UTC)
+
+
+def _remove_active_session(user):
+    session = ActiveSession.query.filter_by(user_id=user.id).first()
+    if session:
+        db.session.delete(session)
+
+
+def _active_user_count_for_org(org_id):
+    cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=30)
+    active_sessions = ActiveSession.query.filter(ActiveSession.last_seen >= cutoff).all()
+    active_user_ids = [session.user_id for session in active_sessions]
+    if not active_user_ids:
+        return 0
+    return User.query.filter(User.org_id == org_id, User.id.in_(active_user_ids)).count()
+
+
+def _serialize_vendor_profile(vendor):
+    return {
+        "id": vendor.id,
+        "vendor_name": vendor.vendor_name,
+        "email": vendor.email or "",
+        "tax_id": vendor.tax_id or "",
+        "default_payment_rail": vendor.default_payment_rail,
+        "remittance_reference": vendor.remittance_reference or "",
+        "bank_last4": vendor.bank_last4 or "",
+        "is_1099_eligible": bool(vendor.is_1099_eligible),
+        "tax_form_type": vendor.tax_form_type,
+        "tin_status": vendor.tin_status,
+    }
+
+
+def _serialize_bank_feed_transaction(transaction):
+    return {
+        "id": transaction.id,
+        "posted_at": iso_date(transaction.posted_at),
+        "description": transaction.description,
+        "amount": round(float(transaction.amount or 0), 2),
+        "reference": transaction.reference or "",
+        "status": transaction.status,
+        "matched_invoice_id": transaction.matched_invoice_id,
+        "matched_bill_id": transaction.matched_bill_id,
+    }
+
+
+def _serialize_bank_connection(connection):
+    return {
+        "id": connection.id,
+        "provider": connection.provider,
+        "institution_name": connection.institution_name or "",
+        "status": connection.status,
+        "created_at": connection.created_at.isoformat() if connection.created_at else None,
+        "updated_at": connection.updated_at.isoformat() if connection.updated_at else None,
+    }
+
+
+def _serialize_reconciliation_rule(rule):
+    return {
+        "id": rule.id,
+        "name": rule.name,
+        "keyword": rule.keyword or "",
+        "direction": rule.direction,
+        "min_amount": rule.min_amount,
+        "max_amount": rule.max_amount,
+        "auto_action": rule.auto_action,
+        "target_reference": rule.target_reference or "",
+        "exception_type": rule.exception_type or "",
+        "priority": rule.priority,
+        "is_active": bool(rule.is_active),
+    }
+
+
+def _serialize_reconciliation_exception(exception):
+    transaction = db.session.get(BankFeedTransaction, exception.bank_transaction_id)
+    return {
+        "id": exception.id,
+        "transaction_id": exception.bank_transaction_id,
+        "description": transaction.description if transaction else "",
+        "exception_type": exception.exception_type,
+        "notes": exception.notes or "",
+        "status": exception.status,
+        "created_at": exception.created_at.isoformat() if exception.created_at else None,
+    }
+
+
+def _serialize_disbursement(disbursement):
+    bill = db.session.get(VendorBill, disbursement.bill_id)
+    return {
+        "id": disbursement.id,
+        "bill_id": disbursement.bill_id,
+        "bill_number": bill.bill_number if bill else "",
+        "vendor_name": bill.vendor_name if bill else "",
+        "payment_rail": disbursement.payment_rail,
+        "status": disbursement.status,
+        "scheduled_date": iso_date(disbursement.scheduled_date),
+        "amount": round(float(disbursement.amount or 0), 2),
+        "reference": disbursement.reference or "",
+        "confirmation_code": disbursement.confirmation_code or "",
+    }
+
+
+def _serialize_employee(employee):
+    return {
+        "id": employee.id,
+        "full_name": employee.full_name,
+        "email": employee.email or "",
+        "pay_type": employee.pay_type,
+        "hourly_rate": round(float(employee.hourly_rate or 0), 2),
+        "salary_amount": round(float(employee.salary_amount or 0), 2),
+        "withholding_rate": round(float(employee.withholding_rate or 0), 2),
+        "benefit_rate": round(float(employee.benefit_rate or 0), 2),
+        "is_active": bool(employee.is_active),
+    }
+
+
+def _serialize_contractor(contractor):
+    return {
+        "id": contractor.id,
+        "full_name": contractor.full_name,
+        "email": contractor.email or "",
+        "tax_id": contractor.tax_id or "",
+        "default_rate": round(float(contractor.default_rate or 0), 2),
+        "is_1099_eligible": bool(contractor.is_1099_eligible),
+        "tax_form_type": contractor.tax_form_type,
+        "is_active": bool(contractor.is_active),
+    }
+
+
+def _serialize_time_entry(entry):
+    return {
+        "id": entry.id,
+        "employee_id": entry.employee_id,
+        "contractor_id": entry.contractor_id,
+        "project_id": entry.project_id,
+        "work_date": iso_date(entry.work_date),
+        "hours": round(float(entry.hours or 0), 2),
+        "hourly_cost": round(float(entry.hourly_cost or 0), 2),
+        "billable_rate": round(float(entry.billable_rate or 0), 2),
+        "description": entry.description or "",
+        "status": entry.status,
+    }
+
+
+def _serialize_mileage_entry(entry):
+    return {
+        "id": entry.id,
+        "employee_id": entry.employee_id,
+        "contractor_id": entry.contractor_id,
+        "project_id": entry.project_id,
+        "trip_date": iso_date(entry.trip_date),
+        "miles": round(float(entry.miles or 0), 2),
+        "rate_per_mile": round(float(entry.rate_per_mile or 0), 2),
+        "purpose": entry.purpose or "",
+        "status": entry.status,
+    }
+
+
+def _serialize_payroll_run(run):
+    return {
+        "id": run.id,
+        "payroll_number": run.payroll_number,
+        "period_start": iso_date(run.period_start),
+        "period_end": iso_date(run.period_end),
+        "pay_date": iso_date(run.pay_date),
+        "status": run.status,
+        "gross_pay": round(float(run.gross_pay or 0), 2),
+        "withholding_total": round(float(run.withholding_total or 0), 2),
+        "benefit_total": round(float(run.benefit_total or 0), 2),
+        "mileage_reimbursement_total": round(float(run.mileage_reimbursement_total or 0), 2),
+        "net_cash": round(float(run.net_cash or 0), 2),
+    }
+
+
+def _serialize_integration(connection):
+    return {
+        "id": connection.id,
+        "provider": connection.provider,
+        "category": connection.category,
+        "status": connection.status,
+        "last_synced_at": connection.last_synced_at.isoformat() if connection.last_synced_at else None,
+    }
+
+
+def _serialize_tax_filing(filing):
+    payload = {}
+    try:
+        payload = json.loads(filing.payload_json or "{}")
+    except (TypeError, ValueError):
+        payload = {}
+    return {
+        "id": filing.id,
+        "reference": filing.reference or "",
+        "jurisdiction_code": filing.jurisdiction_code,
+        "filing_frequency": filing.filing_frequency,
+        "filing_type": filing.filing_type,
+        "period_start": iso_date(filing.period_start),
+        "period_end": iso_date(filing.period_end),
+        "status": filing.status,
+        "payload": payload,
+        "submitted_at": filing.submitted_at.isoformat() if filing.submitted_at else None,
+    }
+
+
 @app.route("/login", methods=["POST"])
 def login():
     data = request.get_json(silent=True) or {}
@@ -118,7 +540,10 @@ def login():
     user = User.query.filter_by(email=email).first()
     if not user or not bcrypt.check_password_hash(user.password, password):
         return {"error": "invalid credentials"}, 401
-    
+
+    _touch_active_session(user)
+    _record_audit(user, "Signed in")
+    db.session.commit()
     token = create_access_token(identity=str(user.id))
     return {"token": token}
 
@@ -162,6 +587,16 @@ def register():
 
         user = User(email=email, password=hashed, role="owner", org_id=org.id, default_company_id=company.id)
         db.session.add(user)
+        db.session.flush()
+        db.session.add(
+            UserCompanyMembership(
+                user_id=user.id,
+                company_id=company.id,
+                role="owner",
+                is_default=True,
+            )
+        )
+        _sync_org_subscription(org, org.plan_code or "free", status=org.subscription_status or "free")
         db.session.commit()
 
         return {"msg": "registered"}, 201
@@ -193,12 +628,11 @@ def me():
 
     org = db.session.get(Organization, user.org_id)
     return {
-        "id": user.id,
-        "email": user.email,
-        "role": user.role,
+        **_serialize_user_record(user),
         "org_id": user.org_id,
-        "default_company_id": user.default_company_id,
         "plan_code": org.plan_code if org else "free",
+        "subscription": _serialize_subscription(org),
+        "api_contract": _build_api_contract(),
     }
 
 
@@ -219,14 +653,66 @@ def _serialize_company(company: Company):
         "onboarding_complete": bool(onboarding_state.is_configured) if onboarding_state else False,
     }
 
-@app.route("/companies", methods=["GET"])
+@app.route("/companies", methods=["GET", "POST"])
 @jwt_required()
 def list_companies():
     user, error = _require_user()
     if error:
         return error
-    companies = Company.query.filter_by(org_id=user.org_id).all()
-    return [ _serialize_company(c) for c in companies ]
+    if request.method == "GET":
+        companies = Company.query.filter_by(org_id=user.org_id).order_by(Company.id.asc()).all()
+        return [_serialize_company(c) for c in companies]
+
+    if user.role not in {"owner", "admin"}:
+        return {"error": "not allowed"}, 403
+
+    org = db.session.get(Organization, user.org_id)
+    plan = get_plan_definition(org.plan_code if org else "free")
+    existing_company_count = Company.query.filter_by(org_id=user.org_id).count()
+    max_companies = int((org.max_companies if org else None) or plan["max_companies"] or 1)
+    if existing_company_count >= max_companies:
+        return {"error": "plan limit reached for companies"}, 403
+
+    data = request.get_json(silent=True) or {}
+    name = (data.get("name") or "").strip()
+    business_type = (data.get("business_type") or "sole_proprietor").strip().lower()
+    partner_names = [str(name).strip() for name in (data.get("partner_names") or []) if str(name).strip()]
+
+    if not name:
+        return {"error": "name is required"}, 400
+    if business_type not in VALID_BUSINESS_TYPES:
+        return {"error": "invalid business_type"}, 400
+    if business_type == "partnership" and len(partner_names) < 2:
+        return {"error": "partnerships require at least two partner names"}, 400
+
+    company = Company(org_id=user.org_id, name=name, business_type=business_type)
+    db.session.add(company)
+    db.session.flush()
+
+    db.session.add(
+        UserCompanyMembership(
+            user_id=user.id,
+            company_id=company.id,
+            role=user.role,
+            is_default=False,
+        )
+    )
+
+    if business_type == "partnership":
+        for idx, partner_name in enumerate(partner_names, start=1):
+            db.session.add(
+                CompanyPartner(company_id=company.id, name=partner_name, display_order=idx)
+            )
+        db.session.add(
+            CompanyOnboardingState(
+                company_id=company.id,
+                is_configured=True,
+                configured_at=datetime.datetime.now(datetime.UTC),
+            )
+        )
+
+    db.session.commit()
+    return _serialize_company(company), 201
 
 @app.route("/companies/<int:company_id>/setup", methods=["PUT"])
 @jwt_required()
@@ -275,6 +761,142 @@ def analytics():
     org = db.session.get(Organization, user.org_id)
     reports = Report.query.filter_by(org_id=user.org_id).count()
     return {"usage": int(org.usage) if org else 0, "reports": reports}
+
+
+@app.route("/billing/plans", methods=["GET"])
+@jwt_required(optional=True)
+def billing_plans():
+    user = get_user_from_token()
+    org = db.session.get(Organization, user.org_id) if user else None
+    return {
+        "items": _plan_items(),
+        "current_plan_code": (org.plan_code if org else "free") or "free",
+    }
+
+
+@app.route("/billing/summary", methods=["GET"])
+@jwt_required()
+def billing_summary():
+    user, error = _require_user()
+    if error:
+        return error
+
+    org = db.session.get(Organization, user.org_id)
+    company_count = Company.query.filter_by(org_id=user.org_id).count()
+    summary = _serialize_subscription(org)
+    summary.update(
+        {
+            "company_count": company_count,
+            "company_limit_reached": company_count >= int(summary["max_companies"] or 1),
+        }
+    )
+    return summary
+
+
+@app.route("/billing/webhook", methods=["POST"])
+def billing_webhook():
+    payload = request.get_json(silent=True) or {}
+    event_type = str(payload.get("type") or "").strip()
+    event_object = ((payload.get("data") or {}).get("object") or {})
+    metadata = event_object.get("metadata") or {}
+    org_id = metadata.get("org_id")
+    plan_code = metadata.get("plan_code")
+    status = (event_object.get("status") or "active").strip().lower()
+
+    if event_type not in {"customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"}:
+        return {"handled": False}
+    if not org_id:
+        return {"handled": False, "error": "missing org_id"}, 400
+
+    org = db.session.get(Organization, int(org_id))
+    if not org:
+        return {"handled": False, "error": "organization not found"}, 404
+
+    if event_type == "customer.subscription.deleted":
+        _sync_org_subscription(
+            org,
+            "free",
+            status="cancelled",
+            customer_id=event_object.get("customer"),
+            subscription_id=event_object.get("id"),
+        )
+    else:
+        _sync_org_subscription(
+            org,
+            plan_code,
+            status=status or "active",
+            customer_id=event_object.get("customer"),
+            subscription_id=event_object.get("id"),
+        )
+
+    db.session.commit()
+    return {"handled": True, "subscription": _serialize_subscription(org)}
+
+
+@app.route("/billing/mpesa/checkout", methods=["POST"])
+@jwt_required()
+def mpesa_checkout():
+    user, error = _require_user()
+    if error:
+        return error
+    data = request.get_json(silent=True) or {}
+    payment_request, checkout_error = _create_mpesa_checkout_request(user, data)
+    if checkout_error:
+        return checkout_error
+    return _serialize_billing_payment_request(payment_request), 201
+
+
+@app.route("/billing/mpesa/stk-push", methods=["POST"])
+@jwt_required()
+def mpesa_stk_push():
+    user, error = _require_user()
+    if error:
+        return error
+    data = request.get_json(silent=True) or {}
+    payment_request, checkout_error = _create_mpesa_checkout_request(user, data)
+    if checkout_error:
+        return checkout_error
+    return _serialize_billing_payment_request(payment_request), 201
+
+
+@app.route("/billing/mpesa/requests/<int:request_id>", methods=["GET"])
+@jwt_required()
+def mpesa_request_status(request_id):
+    user, error = _require_user()
+    if error:
+        return error
+
+    payment_request = BillingPaymentRequest.query.filter_by(
+        id=request_id,
+        org_id=user.org_id,
+    ).first()
+    if not payment_request:
+        return {"error": "payment request not found"}, 404
+    return _serialize_billing_payment_request(payment_request)
+
+
+@app.route("/billing/mpesa/callback", methods=["POST"])
+def mpesa_callback():
+    payload = request.get_json(silent=True) or {}
+    callback = (((payload.get("Body") or {}).get("stkCallback") or {}))
+    checkout_request_id = callback.get("CheckoutRequestID")
+    merchant_request_id = callback.get("MerchantRequestID")
+    result_code = callback.get("ResultCode")
+    request_record = BillingPaymentRequest.query.filter(
+        BillingPaymentRequest.checkout_request_id == checkout_request_id
+    ).first()
+    if not request_record and merchant_request_id:
+        request_record = BillingPaymentRequest.query.filter_by(
+            merchant_request_id=merchant_request_id
+        ).first()
+    if request_record:
+        request_record.callback_payload_json = json.dumps(payload)
+        request_record.status = "paid" if result_code == 0 else "failed"
+        if result_code == 0:
+            org = db.session.get(Organization, request_record.org_id)
+            _sync_org_subscription(org, request_record.plan_code, status="active")
+        db.session.commit()
+    return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
 @app.route("/dashboard")
 @jwt_required()
@@ -561,6 +1183,27 @@ def ai_cfo():
         return error
     company = Company.query.get(user.default_company_id)
     return build_ai_cfo_overview(company)
+
+
+@app.route("/ai-cfo/ask", methods=["POST"])
+@jwt_required()
+@plan_required("ai")
+def ask_ai_cfo():
+    user, error = _require_user()
+    if error:
+        return error
+    company = Company.query.get(user.default_company_id)
+    payload = request.get_json(silent=True) or {}
+    question = (payload.get("question") or "").strip()
+    if not question:
+        return {"error": "question is required"}, 400
+
+    overview = build_ai_cfo_overview(company)
+    return {
+        "answer": answer_ai_cfo_question(question, overview),
+        "top_actions": overview.get("top_actions") or [],
+        "narrative": overview.get("narrative") or "",
+    }
 
 @app.route("/finance/tax/summary")
 @jwt_required()

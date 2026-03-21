@@ -191,6 +191,7 @@ def build_ai_cfo_overview(company):
         "alerts": alerts,
         "top_actions": top_actions,
         "narrative": narrative,
+        "summary": narrative,
     }
 
 def answer_ai_cfo_question(question, overview):
