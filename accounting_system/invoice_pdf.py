@@ -7,6 +7,7 @@ try:
     from reportlab.pdfgen import canvas
 except Exception:  # pragma: no cover - optional dependency
     canvas = None
+    # noinspection PyFinal
     letter = None
 
 
