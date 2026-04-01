@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_jwt_extended import jwt_required, create_access_token, get_jwt_identity
+from werkzeug.exceptions import HTTPException
 from extensions import db, jwt, bcrypt
 from models import *
 from services.accounting_engine import (
@@ -12,7 +13,7 @@ from services.accounting_engine import (
     analyze_journal_lines,
 )
 from services.invoice_service import create_invoice, serialize_invoice, apply_customer_payment, post_invoice_journal
-from services.bill_service import create_bill, serialize_bill, apply_vendor_payment, post_bill_journal
+from services.bill_service import create_bill, serialize_bill, apply_vendor_payment, post_bill_journal, get_or_create_vendor_profile
 from services.reporting_service import (
     build_account_register,
     build_accounting_overview,
@@ -21,21 +22,30 @@ from services.reporting_service import (
     build_workforce_overview,
     build_project_summary,
     aggregate_org_reports,
+    serialize_inventory_item,
+    serialize_purchase_order,
+    serialize_project,
 )
 from services.finance_service import calculate_finance_summary, calculate_tax_summary, get_or_create_tax_profile
 from services.ai_cfo_service import build_ai_cfo_overview, answer_ai_cfo_question
 from services.guided_entry_service import post_guided_entries
 from services.statement_service import build_financial_statements
-from services.ingestion_service import read_external_dataframe, normalize_ledger_dataframe, calc
+from services.ingestion_service import (
+    read_external_dataframe,
+    normalize_ledger_dataframe,
+    calc,
+    extract_manufacturing_schedule,
+)
 from services.common import refresh_finance_documents, generate_document_number
 from middleware import get_user_from_token, roles_required, plan_required, get_plan_definition
-from utils import parse_money, parse_iso_date, today_utc_date, iso_date
+from utils import parse_money, parse_iso_date, today_utc_date, iso_date, hash_key
 from constants import *
 from bootstrap import ensure_startup_schema, build_system_status_payload
 import os
 import datetime
 import json
 import re
+import secrets
 
 app = Flask(__name__)
 
@@ -62,6 +72,11 @@ with app.app_context():
 # Return JSON for unhandled exceptions (avoids HTML 500 pages)
 @app.errorhandler(Exception)
 def handle_exception(err):
+    if isinstance(err, HTTPException):
+        response = err.get_response()
+        response.data = json.dumps({"error": err.description})
+        response.content_type = "application/json"
+        return response
     try:
         db.session.rollback()
     except Exception:
@@ -100,12 +115,48 @@ def _require_user():
     return user, None
 
 
+def _is_org_admin(user):
+    return user.role in {"owner", "admin"}
+
+
+def _membership_rows_for_access(user):
+    rows = _membership_rows_for_user(user.id)
+    if rows:
+        return rows
+    return []
+
+
+def _has_company_access(user, company_id):
+    if _is_org_admin(user):
+        return Company.query.filter_by(id=company_id, org_id=user.org_id).first() is not None
+    return UserCompanyMembership.query.filter_by(user_id=user.id, company_id=company_id).first() is not None
+
+
+def _visible_companies_for_user(user):
+    if _is_org_admin(user):
+        return Company.query.filter_by(org_id=user.org_id).order_by(Company.id.asc()).all()
+
+    company_ids = [row.company_id for row in _membership_rows_for_access(user)]
+    if not company_ids:
+        return []
+    return Company.query.filter(Company.org_id == user.org_id, Company.id.in_(company_ids)).order_by(Company.id.asc()).all()
+
+
 def _resolve_company_for_user(user, company_id=None):
     target_company_id = company_id or request.args.get("company_id")
     if not target_company_id:
         payload = request.get_json(silent=True) or {}
         target_company_id = payload.get("company_id")
     target_company_id = target_company_id or user.default_company_id
+    if not target_company_id:
+        return None
+    try:
+        target_company_id = int(target_company_id)
+    except (TypeError, ValueError):
+        return None
+
+    if not _has_company_access(user, target_company_id):
+        return None
     company = Company.query.filter_by(id=target_company_id, org_id=user.org_id).first()
     if not company:
         return None
@@ -556,11 +607,13 @@ def register():
         email = (data.get("email") or "").strip().lower()
         password = data.get("password")
         org_name = data.get("org")
-        business_type = (data.get("business_type") or "sole_proprietor").strip()
-        partner_names = data.get("partner_names") or []
+        business_type = (data.get("business_type") or "sole_proprietor").strip().lower()
+        partner_names = [str(name).strip() for name in (data.get("partner_names") or []) if str(name).strip()]
 
         if not email or not password or not org_name:
             return {"error": "email, password, and org are required"}, 400
+        if business_type not in VALID_BUSINESS_TYPES:
+            return {"error": "invalid business_type"}, 400
 
         if User.query.filter_by(email=email).first():
             return {"error": "email already exists"}, 409
@@ -601,10 +654,63 @@ def register():
         _sync_org_subscription(org, org.plan_code or "free", status=org.subscription_status or "free")
         db.session.commit()
 
-        return {"msg": "registered"}, 201
+        return {"msg": "registered"}
     except Exception as exc:  # surface errors instead of HTML 500
         db.session.rollback()
         return {"error": str(exc)}, 500
+
+
+@app.route("/password-reset/request", methods=["POST"])
+def password_reset_request():
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    response = {
+        "msg": "If an account exists for that email, a password reset link has been generated.",
+        "delivery": "preview",
+    }
+
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        return response
+
+    now = datetime.datetime.now(datetime.UTC)
+    token = secrets.token_urlsafe(24)
+    PasswordResetToken.query.filter_by(user_id=user.id, used_at=None).update({"used_at": now})
+    db.session.add(
+        PasswordResetToken(
+            user_id=user.id,
+            token_hash=hash_key(token),
+            expires_at=now + datetime.timedelta(hours=1),
+        )
+    )
+    db.session.commit()
+    response["reset_token"] = token
+    return response
+
+
+@app.route("/password-reset/confirm", methods=["POST"])
+def password_reset_confirm():
+    data = request.get_json(silent=True) or {}
+    token = (data.get("token") or "").strip()
+    password = data.get("password") or ""
+    if not token or not password:
+        return {"error": "token and password are required"}, 400
+
+    reset_token = PasswordResetToken.query.filter_by(token_hash=hash_key(token), used_at=None).first()
+    now = datetime.datetime.now(datetime.UTC)
+    if not reset_token or not reset_token.expires_at or reset_token.expires_at < now:
+        return {"error": "invalid or expired reset token"}, 400
+
+    user = db.session.get(User, reset_token.user_id)
+    if not user:
+        reset_token.used_at = now
+        db.session.commit()
+        return {"error": "invalid or expired reset token"}, 400
+
+    user.password = bcrypt.generate_password_hash(password).decode()
+    reset_token.used_at = now
+    db.session.commit()
+    return {"msg": "Password reset complete"}
 
 @app.route("/me", methods=["GET", "DELETE"])
 @jwt_required()
@@ -621,9 +727,11 @@ def me():
 
         # Ensure another owner exists before deleting the last one
         owners = User.query.filter_by(org_id=user.org_id, role="owner").all()
-        if len(owners) <= 1:
+        if user.role == "owner" and len(owners) <= 1:
             return {"error": "create another owner before deleting this account"}, 400
 
+        UserCompanyMembership.query.filter_by(user_id=user.id).delete()
+        ActiveSession.query.filter_by(user_id=user.id).delete()
         db.session.delete(user)
         db.session.commit()
         return {"msg": "account deleted"}
@@ -638,6 +746,64 @@ def me():
         "default_company": _serialize_company(default_company) if default_company else None,
         "api_contract": _build_api_contract(),
     }
+
+
+@app.route("/admin/users", methods=["POST"])
+@jwt_required()
+@roles_required("owner", "admin")
+def create_admin_user():
+    actor, error = _require_user()
+    if error:
+        return error
+
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+    role = (data.get("role") or "member").strip().lower()
+    requested_company_ids = data.get("company_ids") or [actor.default_company_id]
+
+    if not email or not password:
+        return {"error": "email and password are required"}, 400
+    if role not in VALID_MEMBERSHIP_ROLES:
+        return {"error": "invalid role"}, 400
+    if User.query.filter_by(email=email).first():
+        return {"error": "email already exists"}, 409
+
+    valid_company_ids = []
+    for raw_company_id in requested_company_ids:
+        try:
+            company_id = int(raw_company_id)
+        except (TypeError, ValueError):
+            continue
+        company = Company.query.filter_by(id=company_id, org_id=actor.org_id).first()
+        if company:
+            valid_company_ids.append(company.id)
+
+    if not valid_company_ids:
+        return {"error": "at least one valid company_id is required"}, 400
+
+    user = User(
+        email=email,
+        password=bcrypt.generate_password_hash(password).decode(),
+        role=role,
+        org_id=actor.org_id,
+        default_company_id=valid_company_ids[0],
+    )
+    db.session.add(user)
+    db.session.flush()
+
+    for index, company_id in enumerate(dict.fromkeys(valid_company_ids).keys()):
+        db.session.add(
+            UserCompanyMembership(
+                user_id=user.id,
+                company_id=company_id,
+                role=role,
+                is_default=index == 0,
+            )
+        )
+
+    db.session.commit()
+    return {"user": _serialize_user_record(user)}, 201
 
 
 # ---------------------------------------------------------------------------
@@ -664,7 +830,7 @@ def list_companies():
     if error:
         return error
     if request.method == "GET":
-        companies = Company.query.filter_by(org_id=user.org_id).order_by(Company.id.asc()).all()
+        companies = _visible_companies_for_user(user)
         return [_serialize_company(c) for c in companies]
 
     if user.role not in {"owner", "admin"}:
@@ -725,7 +891,7 @@ def setup_company(company_id):
     if error:
         return error
 
-    company = Company.query.filter_by(id=company_id, org_id=user.org_id).first()
+    company = _resolve_company_for_user(user, company_id)
     if not company:
         return {"error": "company not found"}, 404
 

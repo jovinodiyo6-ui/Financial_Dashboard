@@ -44,7 +44,8 @@ def plan_required(minimum_plan):
                 return {"error": "invalid token"}, 401
             org = db.session.get(Organization, user.org_id)
             if not org_has_plan(org, minimum_plan):
-                return {"error": f"{minimum_plan} plan required"}, 403
+                plan = get_plan_definition(minimum_plan)
+                return {"error": f"{plan['label']} plan required"}, 403
             return fn(*args, **kwargs)
         return wrapper
     return decorator
