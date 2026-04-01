@@ -1,6 +1,42 @@
 const DEFAULT_TIMEOUT_MS = 12000;
 const TOKEN_KEY = "token";
 const LEGACY_TOKEN_KEY = "financepro_token";
+const HOSTED_API_FALLBACK = "https://financial-dashboard-8jl0.onrender.com";
+
+const isPrivateNetworkHost = (hostname) => {
+  const normalized = String(hostname || "").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  if (
+    normalized === "localhost" ||
+    normalized === "0.0.0.0" ||
+    normalized === "::1" ||
+    normalized === "[::1]" ||
+    normalized.endsWith(".local")
+  ) {
+    return true;
+  }
+
+  const ipv4Match = normalized.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!ipv4Match) {
+    return false;
+  }
+
+  const octets = ipv4Match.slice(1).map(Number);
+  if (octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
+    return false;
+  }
+
+  const [first, second] = octets;
+  return (
+    first === 10 ||
+    first === 127 ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168)
+  );
+};
 
 const resolveApiBase = () => {
   const configured = String(import.meta.env.VITE_API_URL || "").trim();
@@ -8,7 +44,7 @@ const resolveApiBase = () => {
     return configured.replace(/\/$/, "");
   }
   if (typeof window !== "undefined") {
-    return "/api";
+    return isPrivateNetworkHost(window.location.hostname) ? "/api" : HOSTED_API_FALLBACK;
   }
   return "";
 };
@@ -80,8 +116,13 @@ const extractMessage = ({ payload, status, category }) => {
   if (payload && typeof payload === "object" && typeof payload.error === "string") {
     return payload.error;
   }
-  if (typeof payload === "string" && payload.trim()) {
-    return payload.trim();
+  const textPayload = typeof payload === "string" ? payload.trim() : "";
+  const looksLikeHtml = textPayload.startsWith("<!doctype") || textPayload.startsWith("<html");
+  if (textPayload && !looksLikeHtml) {
+    return textPayload;
+  }
+  if (category === "auth") {
+    return "Your session expired or this deployment requires sign-in. Please sign in again.";
   }
   if (category === "timeout") {
     return "The request took too long. Please try again.";

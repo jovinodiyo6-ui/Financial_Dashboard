@@ -187,8 +187,15 @@ export default function GuidedEntryWizard({
       setForm(createGuidedState(company));
       await onSubmitted?.();
     } catch (err) {
-      setError(err.message || "Failed to create guided entries.");
-      toast.error("Guided entry failed", err.message || "We could not create the guided entries.");
+      const isAuthError = err?.status === 401 || err?.category === "auth";
+      const message = isAuthError
+        ? err.message || "Your session expired. Please sign in again and retry the guided setup."
+        : err.message || "Failed to create guided entries.";
+      setError(message);
+      toast.error(
+        isAuthError ? "Session expired" : "Guided entry failed",
+        message,
+      );
     } finally {
       setSubmitting(false);
     }
