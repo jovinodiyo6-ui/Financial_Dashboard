@@ -7,10 +7,10 @@ const resolveApiBase = () => {
   if (configured) {
     return configured.replace(/\/$/, "");
   }
-  if (typeof window !== "undefined" && window.location.hostname === "localhost") {
+  if (typeof window !== "undefined") {
     return "/api";
   }
-  return "https://financial-dashboard-8jl0.onrender.com";
+  return "";
 };
 
 export const API_BASE = resolveApiBase();

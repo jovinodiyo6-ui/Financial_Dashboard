@@ -225,12 +225,14 @@ def _serialize_memberships(user):
 
 
 def _serialize_user_record(user):
+    setting = UserSetting.query.filter_by(user_id=user.id).first()
     return {
         "id": user.id,
         "email": user.email,
         "role": user.role,
         "default_company_id": user.default_company_id,
         "memberships": _serialize_memberships(user),
+        "theme_preference": setting.theme if setting and setting.theme in {"light", "dark"} else None,
     }
 
 
@@ -584,6 +586,17 @@ def _serialize_tax_filing(filing):
     }
 
 
+def _get_or_create_user_setting(user):
+    setting = UserSetting.query.filter_by(user_id=user.id).first()
+    if setting:
+        return setting
+
+    setting = UserSetting(user_id=user.id)
+    db.session.add(setting)
+    db.session.flush()
+    return setting
+
+
 @app.route("/login", methods=["POST"])
 def login():
     data = request.get_json(silent=True) or {}
@@ -745,6 +758,29 @@ def me():
         "subscription": _serialize_subscription(org),
         "default_company": _serialize_company(default_company) if default_company else None,
         "api_contract": _build_api_contract(),
+    }
+
+
+@app.route("/settings/theme", methods=["GET", "PUT"])
+@jwt_required()
+def theme_setting():
+    user, error = _require_user()
+    if error:
+        return error
+
+    setting = _get_or_create_user_setting(user)
+
+    if request.method == "PUT":
+        data = request.get_json(silent=True) or {}
+        theme = (data.get("theme") or "").strip().lower()
+        if theme not in {"light", "dark"}:
+            return {"error": "theme must be light or dark"}, 400
+        setting.theme = theme
+        db.session.commit()
+
+    return {
+        "theme": setting.theme if setting.theme in {"light", "dark"} else None,
+        "user_id": user.id,
     }
 
 

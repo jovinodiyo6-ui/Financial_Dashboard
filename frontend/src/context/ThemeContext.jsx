@@ -1,4 +1,6 @@
-import { createContext, createElement, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { getThemeSetting, updateThemeSetting } from "../api/theme";
+import { useAuthContext } from "../store/authStore";
 
 const THEME_KEY = "financepro_theme";
 const ThemeContext = createContext(null);
@@ -21,8 +23,9 @@ export function applyTheme(theme) {
     return;
   }
 
-  document.documentElement.dataset.theme = theme;
-  document.documentElement.style.colorScheme = theme;
+  const normalizedTheme = theme === "dark" ? "dark" : "light";
+  document.documentElement.dataset.theme = normalizedTheme;
+  document.documentElement.style.colorScheme = normalizedTheme;
 }
 
 export function initTheme() {
@@ -32,7 +35,13 @@ export function initTheme() {
 }
 
 export function ThemeProvider({ children }) {
-  const [theme, setTheme] = useState(() => readThemePreference());
+  const { isAuthenticated, loading, user } = useAuthContext();
+  const [theme, setThemeState] = useState(() => readThemePreference());
+  const [syncReady, setSyncReady] = useState(false);
+
+  const setTheme = (nextTheme) => {
+    setThemeState(nextTheme === "dark" ? "dark" : "light");
+  };
 
   useEffect(() => {
     applyTheme(theme);
@@ -41,16 +50,69 @@ export function ThemeProvider({ children }) {
     }
   }, [theme]);
 
+  useEffect(() => {
+    if (loading) {
+      return undefined;
+    }
+
+    if (!isAuthenticated || !user?.id) {
+      setSyncReady(false);
+      return undefined;
+    }
+
+    const preferredTheme = user.theme_preference;
+    if (preferredTheme === "light" || preferredTheme === "dark") {
+      setTheme(preferredTheme);
+      setSyncReady(true);
+      return undefined;
+    }
+
+    let cancelled = false;
+    setSyncReady(false);
+
+    getThemeSetting()
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        if (payload?.theme === "light" || payload?.theme === "dark") {
+          setTheme(payload.theme);
+        }
+      })
+      .catch(() => {
+        // Keep local preference when the backend theme lookup is unavailable.
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setSyncReady(true);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, loading, user?.id, user?.theme_preference]);
+
+  useEffect(() => {
+    if (!isAuthenticated || loading || !syncReady || !user?.id) {
+      return;
+    }
+
+    updateThemeSetting(theme).catch(() => {
+      // Keep local state even if backend sync fails temporarily.
+    });
+  }, [theme, isAuthenticated, loading, syncReady, user?.id]);
+
   const value = useMemo(
     () => ({
       theme,
       setTheme,
-      toggleTheme: () => setTheme((current) => (current === "dark" ? "light" : "dark")),
+      toggleTheme: () => setThemeState((current) => (current === "dark" ? "light" : "dark")),
     }),
     [theme],
   );
 
-  return createElement(ThemeContext.Provider, { value }, children);
+  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 }
 
 export function useThemeContext() {

@@ -64,6 +64,10 @@ export default function Settings() {
             </div>
           </div>
 
+          <p className="lead">
+            Your theme preference is applied instantly and synced to your account when you are signed in.
+          </p>
+
           <div className="settings-grid">
             {themeOptions.map((option) => (
               <button

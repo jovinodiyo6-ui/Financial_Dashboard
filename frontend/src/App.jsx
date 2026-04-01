@@ -106,13 +106,13 @@ export default function App() {
   return (
     <BrowserRouter>
       <ErrorBoundary>
-        <ThemeProvider>
-          <ToastProvider>
-            <AuthProvider>
+        <AuthProvider>
+          <ThemeProvider>
+            <ToastProvider>
               <AppRoutes />
-            </AuthProvider>
-          </ToastProvider>
-        </ThemeProvider>
+            </ToastProvider>
+          </ThemeProvider>
+        </AuthProvider>
       </ErrorBoundary>
     </BrowserRouter>
   );
